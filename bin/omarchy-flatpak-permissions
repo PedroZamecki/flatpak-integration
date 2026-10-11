@@ -212,7 +212,7 @@ def main():
     if action == "list-apps":
         apps = get_installed_apps()
         for app_id, name in apps:
-            print(f"\t{name}\t{app_id}")
+            print(f"󰏓\t{name}\t{app_id}")
     elif action == "list-permissions":
         if len(sys.argv) < 3:
             sys.exit(1)

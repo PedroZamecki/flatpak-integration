@@ -1,0 +1,12 @@
+#!/bin/bash
+# omarchy:summary=Update Flatpak packages during Omarchy system update
+
+if command -v flatpak >/dev/null 2>&1; then
+  echo -e "\e[32m\nUpdate Flatpak packages\e[0m"
+  flatpak update -y || echo -e "\e[33mFlatpak update encountered a non-fatal error, skipping.\e[0m"
+  echo
+  # Notify bar widget to refresh if shell is active
+  if command -v omarchy-shell >/dev/null 2>&1; then
+    omarchy-shell shell call zamecki.flatpak-update refresh 2>/dev/null || true
+  fi
+fi

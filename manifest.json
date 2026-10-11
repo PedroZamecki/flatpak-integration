@@ -2,15 +2,24 @@
   "schemaVersion": 1,
   "id": "zamecki.flatpak-integration",
   "name": "Flatpak Integration",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Pedro Zamecki Andrade",
   "license": "MIT",
-  "description": "Native Flatpak integration and Flatseal-like permission manager for Omarchy desktop and menu.",
+  "description": "Native Flatpak integration, Flatseal-like permission manager, and topbar update indicator for Omarchy desktop.",
   "kinds": [
-    "service"
+    "service",
+    "bar-widget"
   ],
   "activation": "on-demand",
   "entryPoints": {
-    "service": "Service.qml"
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Flatpak Updates",
+    "description": "Indicates available Flatpak application updates",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "center"
   }
 }

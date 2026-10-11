@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# omarchy:summary=Check whether Flatpak updates are available
+# Outputs count of updates and exits 0 if updates are available, 1 if not.
+
+set -eo pipefail
+
+if ! command -v flatpak >/dev/null 2>&1; then
+  echo "0"
+  exit 1
+fi
+
+# Query user and system remotes with timeout to prevent blocking on network issues
+updates=$( { timeout 15 flatpak remote-ls --user --updates 2>/dev/null || true; \
+             timeout 15 flatpak remote-ls --system --updates 2>/dev/null || true; } | grep -v '^[[:space:]]*$' || true )
+
+if [[ -n $updates ]]; then
+  count=$(echo "$updates" | wc -l)
+  echo "$count"
+  exit 0
+else
+  echo "0"
+  exit 1
+fi
