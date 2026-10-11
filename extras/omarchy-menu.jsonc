@@ -1,0 +1,44 @@
+{
+  // Omarchy Flatpak Integration Menu Extension
+  "install.flatpak": {
+    "icon": "",
+    "label": "Flatpak",
+    "description": "Search and install Flatpaks from Flathub",
+    "action": "xdg-terminal-exec --app-id=org.omarchy.terminal omarchy-flatpak-install"
+  },
+  "setup.flatpak": {
+    "icon": "",
+    "label": "Flatpaks",
+    "aliases": ["flatpak", "flatpaks", "flatseal"]
+  },
+  "setup.flatpak.permissions": {
+    "icon": "󰌾",
+    "label": "Manage Permissions",
+    "description": "Configure sandbox permissions for Flatpaks",
+    "action": "omarchy-flatpak-menu permissions"
+  },
+  "setup.flatpak.install": {
+    "icon": "󰉉",
+    "label": "Install Application",
+    "description": "Search and install new Flatpaks from Flathub",
+    "action": "omarchy-flatpak-menu install"
+  },
+  "setup.flatpak.remove": {
+    "icon": "󰭌",
+    "label": "Remove Application",
+    "description": "Uninstall an installed Flatpak",
+    "action": "omarchy-flatpak-menu remove"
+  },
+  "setup.flatpak.update": {
+    "icon": "",
+    "label": "Update Applications",
+    "description": "Update installed Flatpaks",
+    "action": "omarchy-flatpak-menu update"
+  },
+  "setup.flatpak.reset": {
+    "icon": "",
+    "label": "Reset Permissions",
+    "description": "Reset permissions to defaults",
+    "action": "omarchy-flatpak-menu reset"
+  }
+}

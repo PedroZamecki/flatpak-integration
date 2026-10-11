@@ -1,0 +1,101 @@
+#!/bin/bash
+
+# omarchy:summary=Flatpak integration menu actions (permissions, install, remove, update, reset)
+# omarchy:group=flatpak
+# omarchy:name=menu
+# omarchy:args=<permissions|install|remove|update|reset>
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HELPER="$SCRIPT_DIR/omarchy-flatpak-permissions"
+INSTALLER="$SCRIPT_DIR/omarchy-flatpak-install"
+
+case "${1:-}" in
+  permissions)
+    apps=$("$HELPER" list-apps)
+    if [[ -z $apps ]]; then
+      omarchy-notification-send "Flatpak" "No Flatpak applications installed."
+      exit 0
+    fi
+
+    selection=$(omarchy-menu-select "Flatpak App to Configure" <<<"$apps") || exit 0
+    [[ -n $selection ]] || exit 0
+
+    # selection format is "<label>\t<app_id>"
+    app_id=$(cut -f2 <<<"$selection")
+    app_name=$(cut -f1 <<<"$selection")
+    [[ -n $app_id ]] || exit 0
+
+    while true; do
+      perms=$("$HELPER" list-permissions "$app_id")
+      chosen=$(omarchy-menu-select "$app_name Permissions" <<<"$perms") || break
+      [[ -n $chosen ]] || break
+
+      key=$(cut -f2 <<<"$chosen")
+      if [[ $key == "done" || -z $key ]]; then
+        break
+      elif [[ $key == "reset" ]]; then
+        msg=$("$HELPER" reset "$app_id")
+        omarchy-notification-send "Flatpak" "$msg"
+      else
+        msg=$("$HELPER" toggle "$app_id" "$key")
+        omarchy-notification-send "Flatpak" "$msg"
+      fi
+    done
+    ;;
+
+  install)
+    if command -v xdg-terminal-exec >/dev/null 2>&1; then
+      exec xdg-terminal-exec --app-id=org.omarchy.terminal "$INSTALLER"
+    else
+      exec omarchy-launch-floating-terminal-with-presentation "$INSTALLER"
+    fi
+    ;;
+
+  remove)
+    apps=$("$HELPER" list-apps)
+    if [[ -z $apps ]]; then
+      omarchy-notification-send "Flatpak" "No Flatpak applications installed to remove."
+      exit 0
+    fi
+
+    selection=$(omarchy-menu-select "Remove Flatpak Application" <<<"$apps") || exit 0
+    [[ -n $selection ]] || exit 0
+
+    app_id=$(cut -f2 <<<"$selection")
+    app_name=$(cut -f1 <<<"$selection")
+    [[ -n $app_id ]] || exit 0
+
+    omarchy-launch-floating-terminal-with-presentation \
+      "flatpak uninstall --user -y $(printf '%q' "$app_id") && omarchy-show-done"
+    ;;
+
+  update)
+    omarchy-launch-floating-terminal-with-presentation \
+      "flatpak update -y && omarchy-show-done"
+    ;;
+
+  reset)
+    apps=$("$HELPER" list-apps)
+    if [[ -z $apps ]]; then
+      omarchy-notification-send "Flatpak" "No Flatpak applications installed."
+      exit 0
+    fi
+
+    selection=$(omarchy-menu-select "Reset Permissions For App" <<<"$apps") || exit 0
+    [[ -n $selection ]] || exit 0
+
+    app_id=$(cut -f2 <<<"$selection")
+    app_name=$(cut -f1 <<<"$selection")
+    [[ -n $app_id ]] || exit 0
+
+    msg=$("$HELPER" reset "$app_id")
+    omarchy-notification-send "Flatpak" "$msg"
+    ;;
+
+  *)
+    echo "Usage: omarchy-flatpak-menu <permissions|install|remove|update|reset>" >&2
+    exit 1
+    ;;
+esac

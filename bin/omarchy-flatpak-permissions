@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""
+omarchy-flatpak-permissions: Inspection and override engine for Flatpak permissions.
+"""
+
+import sys
+import subprocess
+import configparser
+
+PERMISSIONS = [
+    {
+        "key": "network",
+        "label": "Network Access",
+        "category": "shared",
+        "value": "network",
+        "enable_flag": "--share=network",
+        "disable_flag": "--unshare=network",
+    },
+    {
+        "key": "fs_host",
+        "label": "Filesystem: Entire Host System (/)",
+        "category": "filesystems",
+        "value": "host",
+        "enable_flag": "--filesystem=host",
+        "disable_flag": "--nofilesystem=host",
+    },
+    {
+        "key": "fs_home",
+        "label": "Filesystem: Home Directory (~)",
+        "category": "filesystems",
+        "value": "home",
+        "enable_flag": "--filesystem=home",
+        "disable_flag": "--nofilesystem=home",
+    },
+    {
+        "key": "fs_download",
+        "label": "Filesystem: Downloads (~/Downloads)",
+        "category": "filesystems",
+        "value": "xdg-download",
+        "enable_flag": "--filesystem=xdg-download",
+        "disable_flag": "--nofilesystem=xdg-download",
+    },
+    {
+        "key": "fs_documents",
+        "label": "Filesystem: Documents (~/Documents)",
+        "category": "filesystems",
+        "value": "xdg-documents",
+        "enable_flag": "--filesystem=xdg-documents",
+        "disable_flag": "--nofilesystem=xdg-documents",
+    },
+    {
+        "key": "fs_pictures",
+        "label": "Filesystem: Pictures (~/Pictures)",
+        "category": "filesystems",
+        "value": "xdg-pictures",
+        "enable_flag": "--filesystem=xdg-pictures",
+        "disable_flag": "--nofilesystem=xdg-pictures",
+    },
+    {
+        "key": "socket_wayland",
+        "label": "Windowing: Wayland Socket",
+        "category": "sockets",
+        "value": "wayland",
+        "enable_flag": "--socket=wayland",
+        "disable_flag": "--nosocket=wayland",
+    },
+    {
+        "key": "socket_x11",
+        "label": "Windowing: X11 Socket",
+        "category": "sockets",
+        "value": "x11",
+        "enable_flag": "--socket=x11",
+        "disable_flag": "--nosocket=x11",
+    },
+    {
+        "key": "socket_pulseaudio",
+        "label": "Audio: PulseAudio / PipeWire",
+        "category": "sockets",
+        "value": "pulseaudio",
+        "enable_flag": "--socket=pulseaudio",
+        "disable_flag": "--nosocket=pulseaudio",
+    },
+    {
+        "key": "device_dri",
+        "label": "Device: GPU Acceleration (DRI)",
+        "category": "devices",
+        "value": "dri",
+        "enable_flag": "--device=dri",
+        "disable_flag": "--nodevice=dri",
+    },
+    {
+        "key": "device_all",
+        "label": "Device: All Devices (Webcam, USB, etc.)",
+        "category": "devices",
+        "value": "all",
+        "enable_flag": "--device=all",
+        "disable_flag": "--nodevice=all",
+    },
+    {
+        "key": "share_ipc",
+        "label": "IPC: Inter-process Communication",
+        "category": "shared",
+        "value": "ipc",
+        "enable_flag": "--share=ipc",
+        "disable_flag": "--unshare=ipc",
+    },
+]
+
+def get_installed_apps():
+    cmd = ["flatpak", "list", "--app", "--columns=application,name"]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        return []
+    lines = res.stdout.strip().splitlines()
+    if not lines:
+        return []
+    # Drop header
+    data = []
+    for line in lines[1:]:
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            app_id = parts[0].strip()
+            name = parts[1].strip()
+            data.append((app_id, name))
+        elif line.strip():
+            # Fallback split
+            tokens = line.split(maxsplit=1)
+            if tokens:
+                app_id = tokens[0]
+                name = tokens[1] if len(tokens) > 1 else tokens[0]
+                data.append((app_id, name))
+    return data
+
+def parse_app_permissions(app_id):
+    cmd = ["flatpak", "info", "--show-permissions", app_id]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        return {}
+
+    context = {}
+    current_section = None
+    for line in res.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current_section = line[1:-1]
+            if current_section not in context:
+                context[current_section] = {}
+        elif "=" in line and current_section:
+            key, val = line.split("=", 1)
+            items = [v for v in val.split(";") if v]
+            context[current_section][key.strip()] = items
+
+    return context.get("Context", {})
+
+def is_permission_granted(context, perm_spec):
+    cat = perm_spec["category"]
+    val = perm_spec["value"]
+    cat_items = context.get(cat, [])
+    # Check if value is present without leading negation
+    for item in cat_items:
+        if item == val:
+            return True
+        if item == "!" + val:
+            return False
+    return False
+
+def list_permissions_for_menu(app_id):
+    context = parse_app_permissions(app_id)
+    # Header options
+    print("←\tDone / Return to Apps\tdone")
+    print("\tReset All Overrides for this App\treset")
+    for p in PERMISSIONS:
+        granted = is_permission_granted(context, p)
+        glyph = "󰄬" if granted else "󰅖"
+        status = "Granted" if granted else "Denied"
+        label = f"{glyph} {p['label']} [{status}]"
+        print(f"{glyph}\t{label}\t{p['key']}")
+
+def toggle_permission(app_id, perm_key):
+    spec = next((p for p in PERMISSIONS if p["key"] == perm_key), None)
+    if not spec:
+        return False, f"Unknown permission key: {perm_key}"
+
+    context = parse_app_permissions(app_id)
+    currently_granted = is_permission_granted(context, spec)
+    flag = spec["disable_flag"] if currently_granted else spec["enable_flag"]
+    new_state = "Denied" if currently_granted else "Granted"
+
+    cmd = ["flatpak", "override", "--user", flag, app_id]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode == 0:
+        return True, f"{spec['label']} is now {new_state}"
+    else:
+        return False, res.stderr.strip()
+
+def reset_overrides(app_id):
+    cmd = ["flatpak", "override", "--user", "--reset", app_id]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode == 0:
+        return True, f"Reset all overrides for {app_id}"
+    else:
+        return False, res.stderr.strip()
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: omarchy-flatpak-permissions <list-apps|list-permissions|toggle|reset> [args...]")
+        sys.exit(1)
+
+    action = sys.argv[1]
+    if action == "list-apps":
+        apps = get_installed_apps()
+        for app_id, name in apps:
+            print(f"\t{name}\t{app_id}")
+    elif action == "list-permissions":
+        if len(sys.argv) < 3:
+            sys.exit(1)
+        list_permissions_for_menu(sys.argv[2])
+    elif action == "toggle":
+        if len(sys.argv) < 4:
+            sys.exit(1)
+        ok, msg = toggle_permission(sys.argv[2], sys.argv[3])
+        print(msg)
+        sys.exit(0 if ok else 1)
+    elif action == "reset":
+        if len(sys.argv) < 3:
+            sys.exit(1)
+        ok, msg = reset_overrides(sys.argv[2])
+        print(msg)
+        sys.exit(0 if ok else 1)
+    else:
+        print(f"Unknown action: {action}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

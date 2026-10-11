@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "zamecki.flatpak-integration",
+  "name": "Flatpak Integration",
+  "version": "1.0.0",
+  "author": "Pedro Zamecki Andrade",
+  "license": "MIT",
+  "description": "Native Flatpak integration and Flatseal-like permission manager for Omarchy desktop and menu.",
+  "kinds": [
+    "service"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "service": "Service.qml"
+  }
+}

@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# omarchy:summary=Show a fuzzy-finder TUI for picking new Flatpak applications to install from Flathub.
+# omarchy:group=flatpak
+# omarchy:name=install
+
+set -euo pipefail
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy"
+CACHE_FILE="$CACHE_DIR/flathub-apps.cache"
+mkdir -p "$CACHE_DIR"
+
+# Refresh cache if missing or older than 24 hours
+if [[ ! -f $CACHE_FILE || $(find "$CACHE_FILE" -mtime +1 2>/dev/null) ]]; then
+  echo "Updating Flathub application index..."
+  flatpak remote-ls --user --app flathub --columns=application,name,version > "$CACHE_FILE.tmp" 2>/dev/null && \
+    mv -f "$CACHE_FILE.tmp" "$CACHE_FILE" || rm -f "$CACHE_FILE.tmp"
+fi
+
+if [[ ! -s $CACHE_FILE ]]; then
+  echo "Error: Unable to fetch Flathub application list. Please verify your internet connection or run: flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo" >&2
+  exit 1
+fi
+
+fzf_args=(
+  --multi
+  --delimiter '\t'
+  --with-nth '2,1,3'
+  --preview 'flatpak remote-info --user flathub {1}'
+  --preview-label='alt-p: toggle details, alt-j/k: scroll, tab: multi-select'
+  --preview-label-pos='bottom'
+  --preview-window 'down:65%:wrap'
+  --bind 'alt-p:toggle-preview'
+  --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
+  --bind 'alt-k:preview-up,alt-j:preview-down'
+  --color 'pointer:green,marker:green'
+  --prompt 'Flatpak > '
+  --header 'Tab: select multiple | Enter: install selected | Esc: cancel'
+)
+
+selected=$(fzf "${fzf_args[@]}" < "$CACHE_FILE" | cut -f1)
+
+if [[ -n $selected ]]; then
+  echo "Installing selected Flatpak application(s)..."
+  # tr '\n' ' ' converts multiline selections to arguments
+  echo "$selected" | tr '\n' ' ' | xargs flatpak install --user -y flathub
+  if command -v omarchy-show-done >/dev/null 2>&1; then
+    omarchy-show-done
+  else
+    echo "Done! Installation complete."
+  fi
+fi
