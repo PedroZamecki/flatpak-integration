@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# omarchy:summary=Update Flatpak packages and refresh shell update status
+# omarchy:group=flatpak
+# omarchy:name=update
+
+if ! command -v flatpak >/dev/null 2>&1; then
+  echo "Error: Flatpak is not installed." >&2
+  exit 1
+fi
+
+if (( $# == 0 )); then
+  flatpak update -y
+else
+  flatpak update "$@"
+fi
+update_status=$?
+
+if command -v omarchy-shell >/dev/null 2>&1; then
+  if (( update_status == 0 )); then
+    omarchy-shell -q zamecki.flatpak-update clear 2>/dev/null || true
+  else
+    omarchy-shell -q zamecki.flatpak-update refresh 2>/dev/null || true
+  fi
+fi
+
+exit $update_status

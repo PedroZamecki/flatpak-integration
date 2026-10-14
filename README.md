@@ -10,6 +10,8 @@ Native Flatpak integration and Flatseal-like permission manager for **Omarchy**.
   Accessible directly from the root menu (`Setup > Flatpaks`) and searchable via `flatpak`, `flatpaks`, or `flatseal`. Mirrors the native `Setup > Plugins` design.
 - **Flatseal-like Permission Manager:**
   Inspects and toggles Flatpak sandbox permissions (Network, Filesystem, Audio, Sockets, Devices, IPC) per application directly within Omarchy's native `omarchy-menu-select` interface, with zero extra window baggage.
+- **Topbar Update Indicator & One-Click Updates:**
+  Status bar widget that automatically detects pending Flatpak updates, shows the count, and launches update in a presentation window, automatically syncing and clearing the indicator upon completion.
 - **Application Removal & Updates:**
   Clean uninstallation of Flatpak applications with confirmation, and one-click system-wide Flatpak updates.
 - **Override Reset:**
@@ -27,6 +29,7 @@ omarchy plugin enable zamecki.flatpak-integration
 ```
 
 Or run the installer directly:
+
 ```bash
 ./install.sh
 ```
@@ -34,14 +37,19 @@ Or run the installer directly:
 ## Structure
 
 ```
-├── manifest.json              # Omarchy plugin contract (schemaVersion 1, service)
-├── Service.qml                # Headless Quickshell service
-├── install.sh                 # Idempotent menu & shim installer
-├── uninstall.sh               # Cleanup uninstaller
+├── manifest.json                  # Omarchy plugin contract (schemaVersion 1, service & bar-widget)
+├── Service.qml                    # Headless Quickshell service
+├── BarWidget.qml                  # Topbar Flatpak update indicator widget
+├── install.sh                     # Idempotent menu, hook, & shim installer
+├── uninstall.sh                   # Cleanup uninstaller
 ├── bin/
 │   ├── omarchy-flatpak-menu       # Menu action dispatcher
 │   ├── omarchy-flatpak-install    # Flathub search & install fuzzy-finder
+│   ├── omarchy-flatpak-update     # Flatpak updater with shell status sync
+│   ├── omarchy-flatpak-update-available # Update availability checker
 │   └── omarchy-flatpak-permissions# Permission inspection & override engine
+├── hooks/
+│   └── flatpak-update.hook        # Omarchy post-update hook for system updates
 └── extras/
-    └── omarchy-menu.jsonc     # Standalone menu template
+    └── omarchy-menu.jsonc         # Standalone menu template
 ```

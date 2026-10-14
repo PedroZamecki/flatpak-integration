@@ -10,6 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER="$SCRIPT_DIR/omarchy-flatpak-permissions"
 INSTALLER="$SCRIPT_DIR/omarchy-flatpak-install"
+UPDATER="$SCRIPT_DIR/omarchy-flatpak-update"
 
 case "${1:-}" in
   permissions)
@@ -68,12 +69,11 @@ case "${1:-}" in
     [[ -n $app_id ]] || exit 0
 
     omarchy-launch-floating-terminal-with-presentation \
-      "flatpak uninstall --user -y $(printf '%q' "$app_id") && omarchy-show-done"
+      "flatpak uninstall --user -y $(printf '%q' "$app_id"); omarchy-shell -q zamecki.flatpak-update refresh 2>/dev/null || true"
     ;;
 
   update)
-    omarchy-launch-floating-terminal-with-presentation \
-      "flatpak update -y && omarchy-show-done"
+    omarchy-launch-floating-terminal-with-presentation "$UPDATER"
     ;;
 
   reset)

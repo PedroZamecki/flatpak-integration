@@ -16,12 +16,14 @@ BarWidget {
   }
 
   function clear() {
+    if (updateProc.running) updateProc.running = false
     updateAvailable = false
+    updateCount = 0
   }
 
   function runUpdate() {
     if (root.bar) {
-      root.bar.run("omarchy-launch-floating-terminal-with-presentation 'flatpak update -y && omarchy-show-done'")
+      root.bar.run("omarchy-launch-floating-terminal-with-presentation omarchy-flatpak-update")
     }
   }
 
@@ -32,11 +34,11 @@ BarWidget {
   IpcHandler {
     target: "zamecki.flatpak-update"
 
-    function refresh() {
+    function refresh(): void {
       root.broadcast("refresh")
     }
 
-    function clear() {
+    function clear(): void {
       root.broadcast("clear")
     }
   }
@@ -53,6 +55,7 @@ BarWidget {
     }
     onExited: function(exitCode) {
       root.updateAvailable = (exitCode === 0)
+      if (exitCode !== 0) root.updateCount = 0
     }
   }
 

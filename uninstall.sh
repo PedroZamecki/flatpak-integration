@@ -10,7 +10,7 @@ BIN_DIR="$HOME/.local/bin"
 MENU_FILE="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
 HOOK_FILE="$HOME/.config/omarchy/hooks/post-update.d/flatpak-update.hook"
 SHELL_CONFIG="$HOME/.config/omarchy/shell.json"
-SHIMS=(omarchy-flatpak-menu omarchy-flatpak-install omarchy-flatpak-permissions omarchy-flatpak-update-available)
+SHIMS=(omarchy-flatpak-menu omarchy-flatpak-install omarchy-flatpak-permissions omarchy-flatpak-update-available omarchy-flatpak-update)
 TAG_START='// >>> zamecki.flatpak-integration:start'
 TAG_END='// <<< zamecki.flatpak-integration:end'
 

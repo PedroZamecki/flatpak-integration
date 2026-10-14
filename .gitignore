@@ -1,0 +1,6 @@
+.agents/
+.gemini/
+.serena/
+*.swp
+*~
+__pycache__/
