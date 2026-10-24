@@ -65,6 +65,11 @@ jobs:
               if "action" in entry:
                   assert entry["action"], f"{key} has an empty action"
           print(f"extras/omarchy-menu.jsonc: ok ({len(menu)} entries)")
+
+          installer = pathlib.Path("install.sh").read_text()
+          missing = [key for key in menu if f'"{key}"' not in installer]
+          assert not missing, f"menu entries missing from install.sh: {missing}"
+          print("install.sh menu block: in sync")
           PY
 
       - name: ShellCheck
