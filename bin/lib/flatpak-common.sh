@@ -585,7 +585,10 @@ fp_sync_desktop_bridge_if_needed() {
   if [[ -f $FP_DESKTOP_BRIDGE_STAMP ]] &&
     [[ $(<"$FP_DESKTOP_BRIDGE_STAMP") == "$fingerprint" ]] &&
     (( $(fp_desktop_bridge_pending) == 0 )); then
+    # Read by callers after this function returns.
+    # shellcheck disable=SC2034
     FP_DESKTOP_BRIDGE_CREATED=0
+    # shellcheck disable=SC2034
     FP_DESKTOP_BRIDGE_REMOVED=0
     return 0
   fi

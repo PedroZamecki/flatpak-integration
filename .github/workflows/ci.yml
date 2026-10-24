@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate plugin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Check shell syntax
+        run: |
+          set -euo pipefail
+          scripts=(
+            install.sh
+            uninstall.sh
+            hooks/flatpak-update.hook
+            bin/omarchy-flatpak-menu
+            bin/omarchy-flatpak-install
+            bin/omarchy-flatpak-setup
+            bin/omarchy-flatpak-update
+            bin/omarchy-flatpak-update-available
+            bin/lib/flatpak-common.sh
+          )
+          for script in "${scripts[@]}"; do
+            bash -n "$script"
+            printf 'ok: %s\n' "$script"
+          done
+
+      - name: Check Python syntax
+        run: python3 -m py_compile bin/omarchy-flatpak-permissions
+
+      - name: Validate manifest and menu template
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import re
+
+          manifest = json.loads(pathlib.Path("manifest.json").read_text())
+          assert manifest["schemaVersion"] == 1, "unsupported manifest schema"
+          assert manifest["id"] == "flatpak-integration", manifest["id"]
+          assert manifest["version"], "manifest version is missing"
+          assert manifest["kinds"], "manifest kinds are missing"
+          for kind in manifest["kinds"]:
+              assert kind in {"bar", "bar-widget", "menu", "overlay", "panel", "service"}, kind
+          for name, entry in manifest["entryPoints"].items():
+              path = pathlib.Path(entry)
+              assert path.is_file(), f"{name} entry point is missing: {entry}"
+          print("manifest.json: ok")
+
+          text = pathlib.Path("extras/omarchy-menu.jsonc").read_text()
+          without_comments = re.sub(r"(?m)^\s*//.*$", "", text)
+          menu = json.loads(without_comments)
+          assert menu, "menu template is empty"
+          for key, entry in menu.items():
+              if "action" in entry:
+                  assert entry["action"], f"{key} has an empty action"
+          print(f"extras/omarchy-menu.jsonc: ok ({len(menu)} entries)")
+          PY
+
+      - name: ShellCheck
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y shellcheck
+          fi
+          shellcheck -x -S warning \
+            install.sh \
+            uninstall.sh \
+            hooks/flatpak-update.hook \
+            bin/omarchy-flatpak-menu \
+            bin/omarchy-flatpak-install \
+            bin/omarchy-flatpak-setup \
+            bin/omarchy-flatpak-update \
+            bin/omarchy-flatpak-update-available \
+            bin/lib/flatpak-common.sh
