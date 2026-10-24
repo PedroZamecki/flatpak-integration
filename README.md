@@ -223,6 +223,8 @@ omarchy-shell shell reloadConfig
 ├── BarWidget.qml                        # Topbar update indicator
 ├── install.sh                           # Idempotent, migration-aware installer
 ├── uninstall.sh                         # Cleanup uninstaller
+├── LICENSE                              # MIT
+├── CHANGELOG.md                         # Release history
 ├── bin/
 │   ├── lib/flatpak-common.sh            # Shared dependency/scope/catalog/bridge logic
 │   ├── omarchy-flatpak-setup            # Check, setup, configure, repair, desktop
