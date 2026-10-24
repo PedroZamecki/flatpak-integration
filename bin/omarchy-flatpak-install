@@ -129,6 +129,10 @@ mapfile -t apps <<<"$selected"
 
 echo "Installing ${#apps[@]} application(s) from $FP_REMOTE ($(fp_scope_label "$scope"))..."
 if flatpak install "$flag" -y "$FP_REMOTE" "${apps[@]}"; then
+  # Flatpak writes its exports outside the paths this shell scans, so link the
+  # new desktop entries and icons into the app menu right away.
+  fp_sync_desktop_bridge || true
+
   if fp_have omarchy-shell; then
     omarchy-shell -q flatpak-integration-update refresh >/dev/null 2>&1 || true
   fi

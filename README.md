@@ -20,8 +20,14 @@ and a topbar update indicator for **Omarchy**.
   Fuzzy search with live previews and multi-select. Already-installed
   applications are marked with `✓`.
 - **Flatpak Management (`Setup > Flatpaks`)**
-  Setup & Check, Settings, Refresh App Catalog, Manage Permissions, Install,
-  Remove, Update, and Reset Permissions.
+  Setup & Check, Settings, Refresh App Catalog, Refresh App Menu, Manage
+  Permissions, Install, Remove, Update, and Reset Permissions.
+- **Automatic Apps-menu integration**
+  Flatpak exports its desktop entries outside the directories a running Omarchy
+  shell scans, so apps installed with `flatpak install` would otherwise stay
+  invisible until you log out. The plugin links them (and their icons) into
+  `~/.local/share/applications` and `~/.local/share/icons/flatpak`, and re-checks
+  every 30 seconds, so manually installed apps appear on their own.
 - **Flatseal-like Permission Manager**
   Inspects the application metadata plus user/system overrides, and toggles
   sandbox permissions (Network, Filesystem, Audio, Sockets, Devices, IPC)
@@ -85,6 +91,10 @@ user permissions. This plugin keeps privilege use to a minimum:
   - `~/.config/omarchy/shell.json` (bar layout entry)
   - `~/.config/omarchy/flatpak-integration/config`
   - `~/.cache/omarchy/flatpak-integration-apps.cache`
+  - `~/.cache/omarchy/flatpak-integration-desktop-bridge.stamp`
+  - `~/.local/share/applications/*.desktop` symlinks and
+    `~/.local/share/icons/flatpak/` symlinks for the Apps menu (removed by the
+    uninstaller; files that are not Flatpak exports are never touched)
 - **No administrator access by default.** The default `auto` scope prefers the
   per-user Flatpak installation, and permission overrides are written per-user
   (`flatpak override --user`), so normal use never asks for sudo.
@@ -141,6 +151,7 @@ omarchy-flatpak-setup check        # dependency/remote/catalog report
 omarchy-flatpak-setup setup        # install deps + configure Flathub
 omarchy-flatpak-setup configure    # choose scope
 omarchy-flatpak-setup repair       # re-add/enable Flathub + refresh lists
+omarchy-flatpak-setup desktop      # link Flatpak apps into the Apps menu
 omarchy-flatpak-setup status       # JSON status
 omarchy-flatpak-install --refresh  # rebuild catalog and open the installer
 omarchy-flatpak-update             # update both installations
@@ -156,6 +167,16 @@ Run `omarchy-flatpak-setup check`. The most common cause on a fresh Flatpak
 install is that the Flathub remote exists only in one installation while the
 plugin was looking in the other. Version 2 detects the scope automatically.
 `omarchy-flatpak-setup repair` re-adds/enables Flathub and rebuilds the list.
+
+**A Flatpak app does not appear in the Apps menu**
+
+The plugin links new apps automatically within 30 seconds. To force it, run
+`omarchy-flatpak-setup desktop` or use `Setup > Flatpaks > Refresh App Menu`.
+If the app is still missing, check that it exports a desktop entry:
+
+```bash
+ls ~/.local/share/flatpak/exports/share/applications/
+```
 
 **`flatpak: command not found`**
 
@@ -188,8 +209,8 @@ omarchy-shell shell reloadConfig
 ├── install.sh                           # Idempotent, migration-aware installer
 ├── uninstall.sh                         # Cleanup uninstaller
 ├── bin/
-│   ├── lib/flatpak-common.sh            # Shared dependency/scope/catalog logic
-│   ├── omarchy-flatpak-setup            # Check, setup, configure, repair
+│   ├── lib/flatpak-common.sh            # Shared dependency/scope/catalog/bridge logic
+│   ├── omarchy-flatpak-setup            # Check, setup, configure, repair, desktop
 │   ├── omarchy-flatpak-menu             # Menu action dispatcher
 │   ├── omarchy-flatpak-install          # Flathub search & install fuzzy-finder
 │   ├── omarchy-flatpak-update           # Updater for both installations

@@ -102,6 +102,7 @@ MENU_BLOCK=$(cat <<'EOF'
   "setup.flatpak.setup": {"icon":"󰒓","label":"Setup & Check","description":"Install dependencies, configure Flathub, refresh lists","action":"omarchy-flatpak-menu setup"},
   "setup.flatpak.configure": {"icon":"󰒓","label":"Settings","description":"Choose per-user or system-wide installation","action":"omarchy-flatpak-menu configure"},
   "setup.flatpak.refresh": {"icon":"󰑐","label":"Refresh App Catalog","when":"omarchy-cmd-present flatpak","description":"Update the Flathub application list","action":"omarchy-flatpak-menu refresh"},
+  "setup.flatpak.desktop": {"icon":"󰀻","label":"Refresh App Menu","when":"omarchy-cmd-present flatpak","description":"Link newly installed Flatpaks into the app menu","action":"omarchy-flatpak-menu desktop"},
   "setup.flatpak.permissions": {"icon":"󰌾","label":"Manage Permissions","when":"omarchy-cmd-present flatpak","description":"Configure sandbox permissions for Flatpaks","action":"omarchy-flatpak-menu permissions"},
   "setup.flatpak.install": {"icon":"󰉉","label":"Install Application","when":"omarchy-cmd-present flatpak","description":"Search and install new Flatpaks from Flathub","action":"omarchy-flatpak-menu install"},
   "setup.flatpak.remove": {"icon":"󰭌","label":"Remove Application","when":"omarchy-cmd-present flatpak","description":"Uninstall an installed Flatpak","action":"omarchy-flatpak-menu remove"},
@@ -176,12 +177,26 @@ elif [[ -f $SHELL_CONFIG ]]; then
 fi
 
 # --- 5. Make a fresh Flatpak installation usable ---------------------------
-if (( RUN_SETUP )); then
-  if fp_have flatpak; then
+if fp_have flatpak; then
+  if (( RUN_SETUP )); then
     "$PLUGIN_DIR/bin/omarchy-flatpak-setup" repair --stale-only --quiet || true
-  else
-    (( QUIET )) || warn "flatpak: not installed yet. Open Setup > Flatpaks > Setup & Check after installing it."
   fi
+
+  # Always keep the app menu in sync. A session that started before Flatpak
+  # was installed never received Flatpak's XDG_DATA_DIRS paths, so linking the
+  # exports into ~/.local/share/applications is what makes new apps show up in
+  # the Omarchy Apps menu without a logout.
+  fp_sync_desktop_bridge_if_needed || true
+  if (( ! QUIET )); then
+    bridge_count=$(fp_desktop_bridge_count)
+    if (( ${FP_DESKTOP_BRIDGE_CREATED:-0} > 0 )); then
+      say "app menu: linked ${FP_DESKTOP_BRIDGE_CREATED} Flatpak entries"
+    elif (( bridge_count > 0 )); then
+      say "app menu: ${bridge_count} Flatpak entries available"
+    fi
+  fi
+elif (( RUN_SETUP )); then
+  (( QUIET )) || warn "flatpak: not installed yet. Open Setup > Flatpaks > Setup & Check after installing it."
 fi
 
 if fp_have omarchy-shell; then

@@ -31,6 +31,13 @@
     "description": "Update the Flathub application list",
     "action": "omarchy-flatpak-menu refresh"
   },
+  "setup.flatpak.desktop": {
+    "icon": "󰀻",
+    "label": "Refresh App Menu",
+    "when": "omarchy-cmd-present flatpak",
+    "description": "Link newly installed Flatpaks into the app menu",
+    "action": "omarchy-flatpak-menu desktop"
+  },
   "setup.flatpak.permissions": {
     "icon": "󰌾",
     "label": "Manage Permissions",

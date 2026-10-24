@@ -21,6 +21,7 @@ Commands:
   setup          Install missing dependencies, configure Flathub, refresh lists
   configure      Choose the installation scope and Flathub remote
   repair         Re-add/enable Flathub, refresh metadata and the app catalog
+  desktop        Link installed Flatpak apps into the Omarchy app menu
   status         Print machine-readable status as JSON
   install-deps   Install missing system packages only
 
@@ -31,6 +32,7 @@ Options:
       --remote=NAME     Remote name (default: flathub)
       --url=URL         Remote .flatpakrepo URL
       --stale-only      Only refresh metadata/catalog when older than the cache age
+      --if-needed       For "desktop": only sync when Flatpak exports changed
       --json            JSON output for "check"
   -q, --quiet           Only print warnings and errors
   -h, --help            Show this help
@@ -46,6 +48,7 @@ fi
 ASSUME_YES=0
 NO_INSTALL=0
 STALE_ONLY=0
+IF_NEEDED=0
 QUIET=0
 JSON=0
 SCOPE_ARG=""
@@ -57,6 +60,7 @@ while (( $# > 0 )); do
     -y|--yes) ASSUME_YES=1 ;;
     --no-install) NO_INSTALL=1 ;;
     --stale-only) STALE_ONLY=1 ;;
+    --if-needed) IF_NEEDED=1 ;;
     -q|--quiet) QUIET=1 ;;
     --json) JSON=1 ;;
     --scope=*) SCOPE_ARG="${1#*=}" ;;
@@ -256,6 +260,17 @@ cmd_repair() {
     fp_refresh_app_cache --force --quiet || status=1
   fi
 
+  if fp_sync_desktop_bridge; then
+    local bridge_count
+    bridge_count=$(fp_desktop_bridge_count)
+    if (( bridge_count > 0 )); then
+      fp_ok "App menu entries ready ($bridge_count applications)."
+    fi
+  else
+    fp_warn "Could not link Flatpak app menu entries."
+    status=1
+  fi
+
   if (( status == 0 )); then
     fp_ok "Flatpak integration is ready ($(fp_scope_label "$(fp_resolve_scope)") installation)."
   fi
@@ -300,10 +315,43 @@ cmd_setup() {
 
   fp_ensure_appstream || fp_warn "Metadata refresh failed; cached data will be used if present."
   fp_refresh_app_cache --force || fp_warn "Could not download the application catalog."
+  fp_sync_desktop_bridge || fp_warn "Could not link Flatpak app menu entries."
 
   echo
   fp_print_check
   return $?
+}
+
+cmd_desktop() {
+  if ! fp_have flatpak; then
+    # The periodic shell check stays silent while Flatpak is not installed.
+    (( IF_NEEDED && QUIET )) && return 0
+    fp_err "Flatpak is not installed. Run: omarchy-flatpak-setup setup"
+    return 1
+  fi
+
+  if (( IF_NEEDED )); then
+    fp_sync_desktop_bridge_if_needed || return 1
+  elif ! fp_sync_desktop_bridge; then
+    fp_err "Could not link Flatpak app menu entries."
+    return 1
+  fi
+
+  local count
+  count=$(fp_desktop_bridge_count)
+  if (( count > 0 )); then
+    fp_ok "App menu entries ready ($count applications)."
+  else
+    fp_info "No Flatpak applications installed yet."
+  fi
+
+  if (( ${FP_DESKTOP_BRIDGE_CREATED:-0} > 0 )); then
+    fp_info "Linked ${FP_DESKTOP_BRIDGE_CREATED} new entries."
+  fi
+  if (( ${FP_DESKTOP_BRIDGE_REMOVED:-0} > 0 )); then
+    fp_info "Removed ${FP_DESKTOP_BRIDGE_REMOVED} stale entries."
+  fi
+  return 0
 }
 
 cmd_configure() {
@@ -364,6 +412,9 @@ case "$COMMAND" in
     ;;
   repair)
     cmd_repair
+    ;;
+  desktop)
+    cmd_desktop
     ;;
   status)
     fp_print_status

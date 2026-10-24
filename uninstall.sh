@@ -9,6 +9,7 @@ set -uo pipefail
 
 PLUGIN_ID="flatpak-integration"
 OLD_PLUGIN_ID="zamecki.flatpak-integration"
+PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 MENU_FILE="$HOME/.config/omarchy/extensions/omarchy-menu.jsonc"
 HOOK_FILE="$HOME/.config/omarchy/hooks/post-update.d/flatpak-update.hook"
@@ -20,6 +21,11 @@ OLD_TAG_START="// >>> $OLD_PLUGIN_ID:start"
 OLD_TAG_END="// <<< $OLD_PLUGIN_ID:end"
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# shellcheck source=bin/lib/flatpak-common.sh
+if [[ -f $PLUGIN_DIR/bin/lib/flatpak-common.sh ]]; then
+  source "$PLUGIN_DIR/bin/lib/flatpak-common.sh"
+fi
 
 # --- 1. Remove shims -------------------------------------------------------
 for name in "${SHIMS[@]}"; do
@@ -77,6 +83,12 @@ if [[ -f $SHELL_CONFIG ]] && have jq; then
   fi
 elif [[ -f $SHELL_CONFIG ]]; then
   echo "bar: jq is missing; remove the $PLUGIN_ID entry from $SHELL_CONFIG manually" >&2
+fi
+
+# --- 5. Remove app menu bridge links ---------------------------------------
+if declare -F fp_remove_desktop_bridge >/dev/null 2>&1; then
+  removed=$(fp_remove_desktop_bridge)
+  [[ -n $removed ]] && echo "app menu: removed $removed Flatpak entry links"
 fi
 
 if have omarchy-shell; then

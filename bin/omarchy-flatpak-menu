@@ -63,6 +63,19 @@ case "${1:-}" in
     fp_print_status
     ;;
 
+  desktop)
+    if ! fp_have flatpak; then
+      notify "Flatpak is not installed."
+      exit 1
+    fi
+    if fp_sync_desktop_bridge; then
+      notify "App menu refreshed ($(fp_desktop_bridge_count) Flatpak applications)."
+    else
+      notify "Could not refresh the app menu."
+      exit 1
+    fi
+    ;;
+
   refresh)
     run_in_terminal "$SETUP repair"
     ;;
@@ -120,7 +133,7 @@ case "${1:-}" in
     [[ -n $app_id ]] || exit 0
 
     flag=$(fp_flag_for_app "$app_id")
-    run_in_terminal "flatpak uninstall $flag -y $(printf '%q' "$app_id"); omarchy-shell -q flatpak-integration-update refresh 2>/dev/null || true"
+    run_in_terminal "flatpak uninstall $flag -y $(printf '%q' "$app_id"); omarchy-flatpak-setup desktop --quiet 2>/dev/null || true; omarchy-shell -q flatpak-integration-update refresh 2>/dev/null || true"
     ;;
 
   update)
@@ -147,7 +160,7 @@ case "${1:-}" in
     ;;
 
   *)
-    echo "Usage: omarchy-flatpak-menu <setup|configure|check|refresh|permissions|install|remove|update|reset|status>" >&2
+    echo "Usage: omarchy-flatpak-menu <setup|configure|check|desktop|refresh|permissions|install|remove|update|reset|status>" >&2
     exit 1
     ;;
 esac

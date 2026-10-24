@@ -20,6 +20,16 @@ FP_CONFIG_FILE="$FP_CONFIG_DIR/config"
 FP_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy"
 FP_APPS_CACHE="$FP_CACHE_DIR/flatpak-integration-apps.cache"
 
+# Launcher bridge: Flatpak exports desktop entries and icons outside the
+# standard application dirs. When the session started before Flatpak was
+# installed, the shell's XDG_DATA_DIRS does not include them and the app menu
+# stays empty. Mirroring the exports into these standard, always-scanned paths
+# makes new apps appear immediately, with icons, without a logout.
+FP_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+FP_APP_LINKS_DIR="$FP_DATA_HOME/applications"
+FP_ICON_BRIDGE_DIR="$FP_DATA_HOME/icons/flatpak"
+FP_DESKTOP_BRIDGE_STAMP="$FP_CACHE_DIR/flatpak-integration-desktop-bridge.stamp"
+
 FP_SCOPE="auto"
 FP_REMOTE="flathub"
 FP_REMOTE_URL="https://dl.flathub.org/repo/flathub.flatpakrepo"
@@ -381,6 +391,246 @@ fp_scope_has_refs() {
 }
 
 # --------------------------------------------------------------------------
+# Launcher bridge (desktop entries and icons)
+# --------------------------------------------------------------------------
+
+# Every directory Flatpak exports desktop files and icons into, deduplicated.
+fp_export_share_dirs() {
+  {
+    printf '%s\n' "$FP_DATA_HOME/flatpak/exports/share"
+    if fp_have flatpak; then
+      flatpak --installations 2>/dev/null | while IFS= read -r root; do
+        [[ -n $root ]] && printf '%s\n' "$root/exports/share"
+      done
+    else
+      printf '%s\n' "/var/lib/flatpak/exports/share"
+    fi
+  } | awk 'NF && !seen[$0]++'
+}
+
+# True when a path lives under one of the given Flatpak export directories.
+fp_path_in_export_dirs() {
+  local target="${1:-}" dirs="${2:-}" dir
+  [[ -n $target ]] || return 1
+  while IFS= read -r dir; do
+    [[ -n $dir && $target == "$dir"/* ]] && return 0
+  done <<<"$dirs"
+  return 1
+}
+
+# True when a path lives under one of Flatpak's export directories.
+fp_is_flatpak_export_path() {
+  local target="${1:-}"
+  [[ -n $target ]] || return 1
+  fp_path_in_export_dirs "$target" "$(fp_export_share_dirs)"
+}
+
+# True when the desktop session exposes Flatpak's export directories, i.e.
+# whether a freshly started shell can list Flatpak apps without the bridge. The
+# systemd user environment is what a new Hyprland session inherits; the current
+# process environment is only a fallback.
+fp_data_dirs_include_exports() {
+  local dirs="" dir
+  if fp_have systemctl; then
+    dirs=$(systemctl --user show-environment 2>/dev/null |
+      sed -n 's/^XDG_DATA_DIRS=//p' | tail -n 1)
+  fi
+  [[ -n $dirs ]] || dirs="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+  while IFS= read -r dir; do
+    case ":$dirs:" in
+      *":$dir:"*|*":$dir/:"*) ;;
+      *) return 1 ;;
+    esac
+  done < <(fp_export_share_dirs)
+  return 0
+}
+
+# Remove links in a directory whose Flatpak export target no longer exists.
+fp_prune_flatpak_links() {
+  local dir="${1:-}" file target removed=0 dirs
+  [[ -d $dir ]] || { printf '0'; return 0; }
+  dirs=$(fp_export_share_dirs)
+
+  while IFS= read -r -d '' file; do
+    [[ -L $file ]] || continue
+    target=$(readlink -- "$file" 2>/dev/null) || continue
+    fp_path_in_export_dirs "$target" "$dirs" || continue
+    [[ -e $file ]] && continue
+    rm -f -- "$file" && removed=$((removed + 1))
+  done < <(find "$dir" -type l -print0 2>/dev/null)
+
+  printf '%s' "$removed"
+}
+
+# Sorted list of every desktop entry Flatpak currently exports, one file name
+# per line and deduplicated across installations.
+fp_export_desktop_names() {
+  local dir
+  while IFS= read -r dir; do
+    [[ -d $dir/applications ]] || continue
+    find "$dir/applications" -maxdepth 1 -name '*.desktop' -printf '%f\n' 2>/dev/null
+  done < <(fp_export_share_dirs) | LC_ALL=C sort -u
+}
+
+# Desktop entries and icons Flatpak exports that the bridge has not linked yet.
+# Zero means the app menu is up to date.
+fp_desktop_bridge_pending() {
+  local name dest count=0 dir file rel
+  while IFS= read -r name; do
+    dest="$FP_APP_LINKS_DIR/$name"
+    [[ -e $dest || -L $dest ]] && continue
+    count=$((count + 1))
+  done < <(fp_export_desktop_names)
+
+  while IFS= read -r dir; do
+    [[ -d $dir/icons/hicolor ]] || continue
+    while IFS= read -r -d '' file; do
+      rel="${file#"$dir/icons/hicolor/"}"
+      dest="$FP_ICON_BRIDGE_DIR/$rel"
+      [[ -e $dest || -L $dest ]] && continue
+      count=$((count + 1))
+    done < <(find "$dir/icons/hicolor" -path '*/apps/*' \
+      \( -name '*.png' -o -name '*.svg' \) \( -type f -o -type l \) -print0 2>/dev/null)
+  done < <(fp_export_share_dirs)
+
+  printf '%s' "$count"
+}
+
+# Hash of the Flatpak export tree. It changes when an app is installed,
+# updated, or removed, which is exactly when the bridge needs a resync.
+fp_desktop_bridge_fingerprint() {
+  local dir
+  {
+    while IFS= read -r dir; do
+      [[ -d $dir/applications ]] &&
+        find "$dir/applications" -maxdepth 1 -name '*.desktop' -print 2>/dev/null
+      [[ -d $dir/icons/hicolor ]] &&
+        find "$dir/icons/hicolor" -path '*/apps/*' \
+          \( -name '*.png' -o -name '*.svg' \) -print 2>/dev/null
+    done < <(fp_export_share_dirs)
+  } | LC_ALL=C sort | sha256sum | awk '{print $1}'
+}
+
+fp_write_desktop_bridge_stamp() {
+  local fingerprint="${1:-}"
+  [[ -n $fingerprint ]] || fingerprint=$(fp_desktop_bridge_fingerprint)
+  mkdir -p -- "$FP_CACHE_DIR" 2>/dev/null || return 0
+  printf '%s\n' "$fingerprint" >"$FP_DESKTOP_BRIDGE_STAMP" 2>/dev/null || true
+}
+
+# Mirror Flatpak's exported .desktop files and icons into paths every launcher
+# reads. Existing user files are never replaced; stale links are pruned. Safe
+# to run on every shell start and after every install/uninstall.
+fp_sync_desktop_bridge() {
+  local source file name size dest created=0 removed=0
+  local fingerprint
+  fingerprint=$(fp_desktop_bridge_fingerprint)
+
+  mkdir -p "$FP_APP_LINKS_DIR" || return 1
+
+  removed=$((removed + $(fp_prune_flatpak_links "$FP_APP_LINKS_DIR")))
+  [[ -d $FP_ICON_BRIDGE_DIR ]] &&
+    removed=$((removed + $(fp_prune_flatpak_links "$FP_ICON_BRIDGE_DIR")))
+
+  # Desktop entries. Exported files are symlinks, so match by name only.
+  while IFS= read -r source; do
+    [[ -d $source/applications ]] || continue
+    while IFS= read -r -d '' file; do
+      name=$(basename -- "$file")
+      dest="$FP_APP_LINKS_DIR/$name"
+      [[ -e $dest || -L $dest ]] && continue
+      ln -s -- "$file" "$dest" && created=$((created + 1))
+    done < <(find "$source/applications" -maxdepth 1 -name '*.desktop' -print0 2>/dev/null)
+  done < <(fp_export_share_dirs)
+
+  # Icons, mirrored into a private hicolor-shaped tree. Omarchy's app library
+  # scans ~/.local/share/icons recursively, so no theme merge is needed.
+  while IFS= read -r source; do
+    [[ -d $source/icons/hicolor ]] || continue
+    while IFS= read -r -d '' file; do
+      size=$(basename -- "$(dirname -- "$(dirname -- "$file")")")
+      name=$(basename -- "$file")
+      dest="$FP_ICON_BRIDGE_DIR/$size/apps/$name"
+      [[ -e $dest || -L $dest ]] && continue
+      mkdir -p -- "$(dirname -- "$dest")" || continue
+      ln -s -- "$file" "$dest" && created=$((created + 1))
+    done < <(find "$source/icons/hicolor" -path '*/apps/*' \
+      \( -name '*.png' -o -name '*.svg' \) \( -type f -o -type l \) -print0 2>/dev/null)
+  done < <(fp_export_share_dirs)
+
+  # Refresh the MIME cache only when the set of links actually changed.
+  if (( created > 0 || removed > 0 )) && fp_have update-desktop-database; then
+    update-desktop-database "$FP_APP_LINKS_DIR" >/dev/null 2>&1 || true
+  fi
+
+  # Do not leave empty size/apps directories behind after pruning.
+  if [[ -d $FP_ICON_BRIDGE_DIR ]]; then
+    find "$FP_ICON_BRIDGE_DIR" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+  fi
+
+  fp_write_desktop_bridge_stamp "$fingerprint"
+
+  FP_DESKTOP_BRIDGE_CREATED=$created
+  FP_DESKTOP_BRIDGE_REMOVED=$removed
+  return 0
+}
+
+# Cheap variant for periodic checks: does nothing unless Flatpak's exports
+# changed or a link went missing. Used by the shell service every 30 seconds.
+fp_sync_desktop_bridge_if_needed() {
+  local fingerprint
+  fingerprint=$(fp_desktop_bridge_fingerprint)
+
+  if [[ -f $FP_DESKTOP_BRIDGE_STAMP ]] &&
+    [[ $(<"$FP_DESKTOP_BRIDGE_STAMP") == "$fingerprint" ]] &&
+    (( $(fp_desktop_bridge_pending) == 0 )); then
+    FP_DESKTOP_BRIDGE_CREATED=0
+    FP_DESKTOP_BRIDGE_REMOVED=0
+    return 0
+  fi
+
+  fp_sync_desktop_bridge
+}
+
+# Number of Flatpak entries currently linked into the app menu.
+fp_desktop_bridge_count() {
+  local file target count=0 dirs
+  [[ -d $FP_APP_LINKS_DIR ]] || { printf '0'; return 0; }
+  dirs=$(fp_export_share_dirs)
+
+  while IFS= read -r -d '' file; do
+    target=$(readlink -- "$file" 2>/dev/null) || continue
+    fp_path_in_export_dirs "$target" "$dirs" && count=$((count + 1))
+  done < <(find "$FP_APP_LINKS_DIR" -maxdepth 1 -type l -name '*.desktop' -print0 2>/dev/null)
+
+  printf '%s' "$count"
+}
+
+# Remove every bridge link this plugin created. Used by the uninstaller.
+fp_remove_desktop_bridge() {
+  local file target removed=0
+
+  while IFS= read -r -d '' file; do
+    target=$(readlink -- "$file" 2>/dev/null) || continue
+    fp_is_flatpak_export_path "$target" || continue
+    rm -f -- "$file" && removed=$((removed + 1))
+  done < <(
+    find "$FP_APP_LINKS_DIR" -maxdepth 1 -type l -name '*.desktop' -print0 2>/dev/null
+    find "$FP_ICON_BRIDGE_DIR" -type l -print0 2>/dev/null
+  )
+
+  if [[ -d $FP_ICON_BRIDGE_DIR ]]; then
+    find "$FP_ICON_BRIDGE_DIR" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+  fi
+  if fp_have update-desktop-database; then
+    update-desktop-database "$FP_APP_LINKS_DIR" >/dev/null 2>&1 || true
+  fi
+
+  printf '%s' "$removed"
+}
+
+# --------------------------------------------------------------------------
 # Dependencies
 # --------------------------------------------------------------------------
 
@@ -525,9 +775,20 @@ fp_print_check() {
       fp_warn "Application catalog not cached yet (run setup)"
     fi
 
-    local installed_count
+    local installed_count bridge_count
     installed_count=$(fp_installed_app_ids 2>/dev/null | grep -c . || true)
     fp_ok "Installed Flatpak applications: ${installed_count:-0}"
+
+    bridge_count=$(fp_desktop_bridge_count)
+    if (( bridge_count > 0 )); then
+      fp_ok "App menu entries linked ($bridge_count applications)"
+    else
+      fp_note "App menu entries will be linked after the first app install"
+    fi
+
+    if ! fp_data_dirs_include_exports; then
+      fp_note "Flatpak's export paths are not in this session yet; the plugin links them for the app menu."
+    fi
   fi
 
   echo
@@ -544,12 +805,15 @@ fp_print_check() {
 # Short machine-readable status used by the service/bar widget.
 fp_print_status() {
   local ready=false flatpak_version="" scope="" remote_ok=false missing="" missing_omarchy=""
+  local desktop_entries=0 session_exports=false
   fp_core_ready && fp_have python3 && ready=true
   flatpak_version=$(fp_have flatpak && fp_flatpak_version || true)
   scope=$(fp_resolve_scope)
   fp_remote_exists "$scope" && remote_ok=true
   missing=$(fp_missing_commands | tr '\n' ' ')
   missing_omarchy=$(fp_missing_omarchy_commands | tr '\n' ' ')
+  desktop_entries=$(fp_desktop_bridge_count)
+  fp_data_dirs_include_exports && session_exports=true
 
   jq -n \
     --argjson ready "$ready" \
@@ -559,6 +823,8 @@ fp_print_status() {
     --argjson remote_ok "$remote_ok" \
     --arg missing "$missing" \
     --arg missing_omarchy "$missing_omarchy" \
+    --argjson desktop_entries "${desktop_entries:-0}" \
+    --argjson session_exports "$session_exports" \
     --arg config "$FP_CONFIG_FILE" \
     '{
       ready: $ready,
@@ -568,6 +834,8 @@ fp_print_status() {
       remote_ok: $remote_ok,
       missing: ($missing | split(" ") | map(select(length > 0))),
       missing_omarchy: ($missing_omarchy | split(" ") | map(select(length > 0))),
+      desktop_entries: $desktop_entries,
+      session_exports: $session_exports,
       config: $config
     }'
 }
