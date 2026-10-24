@@ -1,5 +1,8 @@
 # flatpak-integration
 
+[![CI](https://github.com/PedroZamecki/flatpak-integration/actions/workflows/ci.yml/badge.svg)](https://github.com/PedroZamecki/flatpak-integration/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Native Flatpak integration, Flathub setup, Flatseal-like permission management,
 and a topbar update indicator for **Omarchy**.
 
@@ -60,7 +63,7 @@ The Omarchy helpers (`omarchy-menu-select`, `omarchy-notification-send`,
 ./install.sh
 
 # Or through Omarchy
-omarchy plugin add https://github.com/PedroZamecki/zamecki.flatpak-integration --enable
+omarchy plugin add https://github.com/PedroZamecki/flatpak-integration --enable
 omarchy plugin enable flatpak-integration
 ```
 
@@ -78,6 +81,18 @@ omarchy-flatpak-setup setup
 
 The installer is idempotent. It also migrates the old
 `zamecki.flatpak-integration` menu entries, bar widget, and shims.
+
+## Uninstall
+
+```bash
+./uninstall.sh
+# or
+omarchy plugin remove flatpak-integration
+```
+
+The uninstaller removes the command shims, menu entries, post-update hook, bar
+widget, and the Apps-menu links it created. Your Flatpak applications, their
+permissions, and the plugin config are kept.
 
 ## Privileges and side effects
 
@@ -165,7 +180,7 @@ omarchy-flatpak-menu <action>      # menu dispatcher
 
 Run `omarchy-flatpak-setup check`. The most common cause on a fresh Flatpak
 install is that the Flathub remote exists only in one installation while the
-plugin was looking in the other. Version 2 detects the scope automatically.
+plugin was looking in the other. The plugin detects the scope automatically.
 `omarchy-flatpak-setup repair` re-adds/enables Flathub and rebuilds the list.
 
 **A Flatpak app does not appear in the Apps menu**
@@ -218,6 +233,15 @@ omarchy-shell shell reloadConfig
 │   └── omarchy-flatpak-permissions      # Permission inspection & override engine
 ├── hooks/
 │   └── flatpak-update.hook              # Omarchy post-update hook
-└── extras/
-    └── omarchy-menu.jsonc               # Standalone menu template
+├── extras/
+│   └── omarchy-menu.jsonc               # Standalone menu template
+└── .github/workflows/ci.yml             # Syntax, manifest, and ShellCheck CI
 ```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+[MIT](LICENSE) © Pedro Zamecki Andrade

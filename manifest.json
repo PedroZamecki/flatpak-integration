@@ -5,7 +5,7 @@
   "version": "2.0.0",
   "author": "Pedro Zamecki Andrade",
   "license": "MIT",
-  "description": "Native Flatpak integration with dependency checks, Flathub setup, a Flatseal-like permission manager, and a topbar update indicator for Omarchy.",
+  "description": "Native Flatpak integration for Omarchy: dependency-aware Flathub setup, automatic Apps-menu entries, a Flatseal-like permission manager, and a topbar update indicator.",
   "kinds": [
     "service",
     "bar-widget"
