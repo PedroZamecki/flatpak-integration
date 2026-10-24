@@ -23,4 +23,13 @@ if command -v omarchy-shell >/dev/null 2>&1; then
   omarchy-shell -q flatpak-integration-update refresh >/dev/null 2>&1 || true
 fi
 
+# Updates can replace desktop entries and icons; re-link them for the Apps menu.
+menu_sync=$(command -v omarchy-flatpak-setup 2>/dev/null || true)
+if [[ -z $menu_sync && -x $HOME/.local/bin/omarchy-flatpak-setup ]]; then
+  menu_sync="$HOME/.local/bin/omarchy-flatpak-setup"
+fi
+if [[ -n $menu_sync ]]; then
+  "$menu_sync" desktop --if-needed --quiet || true
+fi
+
 echo

@@ -8,6 +8,7 @@
 #   3. Menu entries (Install > Flatpak, Setup > Flatpaks)
 #   4. Topbar update widget in ~/.config/omarchy/shell.json
 #   5. A dependency/remote check so a fresh Flatpak install works
+#   6. Apps-menu links for installed Flatpaks
 #
 # Idempotent and migration-aware: it replaces the old
 # zamecki.flatpak-integration entries left by earlier versions.
