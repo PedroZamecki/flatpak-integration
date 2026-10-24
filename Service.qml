@@ -9,10 +9,10 @@ Item {
   property var manifest: null
 
   readonly property string home: Quickshell.env("HOME") || ""
-  readonly property string pluginDir: manifest && manifest.__sourceDir ? manifest.__sourceDir : (home + "/.config/omarchy/plugins/zamecki.flatpak-integration")
+  readonly property string pluginDir: manifest && manifest.__sourceDir ? manifest.__sourceDir : (home + "/.config/omarchy/plugins/flatpak-integration")
 
   Component.onCompleted: {
-    installerProcess.command = ["bash", pluginDir + "/install.sh"]
+    installerProcess.command = ["bash", pluginDir + "/install.sh", "--quiet"]
     installerProcess.running = true
   }
 
@@ -21,7 +21,7 @@ Item {
     running: false
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (text.trim() !== "") console.warn("zamecki.flatpak-integration install: " + text.trim())
+      onStreamFinished: if (text.trim() !== "") console.warn("flatpak-integration install: " + text.trim())
     }
   }
 }

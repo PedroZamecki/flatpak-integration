@@ -1,55 +1,172 @@
-# zamecki.flatpak-integration
+# flatpak-integration
 
-Native Flatpak integration and Flatseal-like permission manager for **Omarchy**.
+Native Flatpak integration, Flathub setup, Flatseal-like permission management,
+and a topbar update indicator for **Omarchy**.
 
 ## Features
 
-- **Native Install Menu (`Install > Flatpak`):**
-  Adds a Flatpak entry directly to Omarchy's `Install` menu, allowing fuzzy search and installation of Flathub applications using an interactive `fzf` TUI with live previews and multi-select.
-- **Flatpak Management (`Setup > Flatpaks`):**
-  Accessible directly from the root menu (`Setup > Flatpaks`) and searchable via `flatpak`, `flatpaks`, or `flatseal`. Mirrors the native `Setup > Plugins` design.
-- **Flatseal-like Permission Manager:**
-  Inspects and toggles Flatpak sandbox permissions (Network, Filesystem, Audio, Sockets, Devices, IPC) per application directly within Omarchy's native `omarchy-menu-select` interface, with zero extra window baggage.
-- **Topbar Update Indicator & One-Click Updates:**
-  Status bar widget that automatically detects pending Flatpak updates, shows the count, and launches update in a presentation window, automatically syncing and clearing the indicator upon completion.
-- **Application Removal & Updates:**
-  Clean uninstallation of Flatpak applications with confirmation, and one-click system-wide Flatpak updates.
-- **Override Reset:**
-  Instantly restore default permissions per application or globally.
+- **Dependency-aware setup**
+  Checks Flatpak, Bubblewrap, fzf, Python, jq, and the Omarchy menu helpers
+  before enabling anything. Missing Arch packages can be installed from the
+  setup screen.
+- **Flathub first-run fix**
+  A fresh Flatpak installation has no remote and no AppStream data, which makes
+  application search return nothing. The setup flow adds/enables Flathub,
+  refreshes metadata, and rebuilds the application catalog.
+- **Per-user or system-wide**
+  Works with whichever installation already has Flathub, and can be pinned to
+  per-user (no administrator password) or system-wide in the settings screen.
+- **Native Install Menu (`Install > Flatpak`)**
+  Fuzzy search with live previews and multi-select. Already-installed
+  applications are marked with `✓`.
+- **Flatpak Management (`Setup > Flatpaks`)**
+  Setup & Check, Settings, Refresh App Catalog, Manage Permissions, Install,
+  Remove, Update, and Reset Permissions.
+- **Flatseal-like Permission Manager**
+  Inspects the application metadata plus user/system overrides, and toggles
+  sandbox permissions (Network, Filesystem, Audio, Sockets, Devices, IPC)
+  directly in Omarchy's native menu. Overrides are written per-user, so they
+  work for system-wide apps without sudo.
+- **Topbar Update Indicator**
+  Shows the number of pending updates across per-user and system installations,
+  launches updates in a presentation terminal, and refreshes when finished.
+- **Omarchy update hook**
+  Updates Flatpaks during `omarchy update` and keeps the indicator in sync.
+
+## Dependencies
+
+| Command | Arch package | Needed for |
+| --- | --- | --- |
+| `flatpak` | `flatpak` | everything |
+| `bwrap` | `bubblewrap` | running sandboxed apps |
+| `fzf` | `fzf` | install menu |
+| `python3` | `python` | permission manager |
+| `jq` | `jq` | bar widget / shell.json |
+| `gum` | `gum` | setup prompts (optional) |
+
+The Omarchy helpers (`omarchy-menu-select`, `omarchy-notification-send`,
+`omarchy-launch-floating-terminal-with-presentation`) ship with Omarchy.
 
 ## Installation
 
 ```bash
-# Clone the repository
-git clone file:///home/zamecki/Projects/zamecki.flatpak-integration ~/.config/omarchy/plugins/zamecki.flatpak-integration
+# From the repository root
+./install.sh
 
-# Rescan and enable plugin
-omarchy-shell shell rescanPlugins
-omarchy plugin enable zamecki.flatpak-integration
+# Or through Omarchy
+omarchy plugin add https://github.com/PedroZamecki/zamecki.flatpak-integration --enable
+omarchy plugin enable flatpak-integration
 ```
 
-Or run the installer directly:
+Then open:
+
+```text
+Setup > Flatpaks > Setup & Check
+```
+
+or run:
 
 ```bash
-./install.sh
+omarchy-flatpak-setup setup
+```
+
+The installer is idempotent. It also migrates the old
+`zamecki.flatpak-integration` menu entries, bar widget, and shims.
+
+## Configuration
+
+Settings live in:
+
+```text
+~/.config/omarchy/flatpak-integration/config
+```
+
+```bash
+FP_SCOPE="auto"        # auto | user | system
+FP_REMOTE="flathub"
+FP_REMOTE_URL="https://dl.flathub.org/repo/flathub.flatpakrepo"
+FP_CACHE_MAX_AGE=86400 # seconds
+```
+
+`auto` keeps an existing setup working: it prefers a per-user remote, then a
+system remote, and creates a per-user setup only when neither exists.
+
+Change it interactively:
+
+```bash
+omarchy-flatpak-setup configure
+```
+
+Or non-interactively:
+
+```bash
+omarchy-flatpak-setup configure --scope=user
+omarchy-flatpak-setup configure --scope=system
+```
+
+## Commands
+
+```bash
+omarchy-flatpak-setup check        # dependency/remote/catalog report
+omarchy-flatpak-setup setup        # install deps + configure Flathub
+omarchy-flatpak-setup configure    # choose scope
+omarchy-flatpak-setup repair       # re-add/enable Flathub + refresh lists
+omarchy-flatpak-setup status       # JSON status
+omarchy-flatpak-install --refresh  # rebuild catalog and open the installer
+omarchy-flatpak-update             # update both installations
+omarchy-flatpak-update-available   # pending update count
+omarchy-flatpak-menu <action>      # menu dispatcher
+```
+
+## Troubleshooting
+
+**The install list is empty**
+
+Run `omarchy-flatpak-setup check`. The most common cause on a fresh Flatpak
+install is that the Flathub remote exists only in one installation while the
+plugin was looking in the other. Version 2 detects the scope automatically.
+`omarchy-flatpak-setup repair` re-adds/enables Flathub and rebuilds the list.
+
+**`flatpak: command not found`**
+
+Open `Setup > Flatpaks > Setup & Check`, or install the Arch package:
+
+```bash
+omarchy pkg add flatpak
+```
+
+**Permission toggles do not apply to a system app**
+
+Overrides are intentionally written per-user (`flatpak override --user`). They
+apply to system-wide applications too and do not require administrator access.
+
+**The bar widget is missing**
+
+Make sure `flatpak-integration` is present in `~/.config/omarchy/shell.json`
+under `bar.layout.center`, then reload:
+
+```bash
+omarchy-shell shell reloadConfig
 ```
 
 ## Structure
 
-```
-├── manifest.json                  # Omarchy plugin contract (schemaVersion 1, service & bar-widget)
-├── Service.qml                    # Headless Quickshell service
-├── BarWidget.qml                  # Topbar Flatpak update indicator widget
-├── install.sh                     # Idempotent menu, hook, & shim installer
-├── uninstall.sh                   # Cleanup uninstaller
+```text
+├── manifest.json                        # Omarchy plugin contract
+├── Service.qml                          # Headless Quickshell service
+├── BarWidget.qml                        # Topbar update indicator
+├── install.sh                           # Idempotent, migration-aware installer
+├── uninstall.sh                         # Cleanup uninstaller
 ├── bin/
-│   ├── omarchy-flatpak-menu       # Menu action dispatcher
-│   ├── omarchy-flatpak-install    # Flathub search & install fuzzy-finder
-│   ├── omarchy-flatpak-update     # Flatpak updater with shell status sync
+│   ├── lib/flatpak-common.sh            # Shared dependency/scope/catalog logic
+│   ├── omarchy-flatpak-setup            # Check, setup, configure, repair
+│   ├── omarchy-flatpak-menu             # Menu action dispatcher
+│   ├── omarchy-flatpak-install          # Flathub search & install fuzzy-finder
+│   ├── omarchy-flatpak-update           # Updater for both installations
 │   ├── omarchy-flatpak-update-available # Update availability checker
-│   └── omarchy-flatpak-permissions# Permission inspection & override engine
+│   └── omarchy-flatpak-permissions      # Permission inspection & override engine
 ├── hooks/
-│   └── flatpak-update.hook        # Omarchy post-update hook for system updates
+│   └── flatpak-update.hook              # Omarchy post-update hook
 └── extras/
-    └── omarchy-menu.jsonc         # Standalone menu template
+    └── omarchy-menu.jsonc               # Standalone menu template
 ```

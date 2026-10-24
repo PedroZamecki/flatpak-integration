@@ -1,29 +1,88 @@
 #!/bin/bash
 
-# omarchy:summary=Flatpak integration menu actions (permissions, install, remove, update, reset)
+# omarchy:summary=Flatpak integration menu actions (setup, permissions, install, remove, update, reset)
 # omarchy:group=flatpak
 # omarchy:name=menu
-# omarchy:args=<permissions|install|remove|update|reset>
+# omarchy:args=<setup|configure|check|refresh|permissions|install|remove|update|reset|status>
 
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/flatpak-common.sh
+source "$SCRIPT_DIR/lib/flatpak-common.sh"
+
 HELPER="$SCRIPT_DIR/omarchy-flatpak-permissions"
 INSTALLER="$SCRIPT_DIR/omarchy-flatpak-install"
 UPDATER="$SCRIPT_DIR/omarchy-flatpak-update"
+SETUP="$SCRIPT_DIR/omarchy-flatpak-setup"
+
+notify() {
+  if fp_have omarchy-notification-send; then
+    omarchy-notification-send "Flatpak" "$1"
+  else
+    echo "$1" >&2
+  fi
+}
+
+# Run an interactive command visibly. Omarchy's floating terminal keeps the
+# logo/done presentation consistent with the rest of the desktop.
+run_in_terminal() {
+  local cmd="$1"
+  if fp_have omarchy-launch-floating-terminal-with-presentation; then
+    exec omarchy-launch-floating-terminal-with-presentation "$cmd"
+  elif fp_have xdg-terminal-exec; then
+    exec xdg-terminal-exec --app-id=org.omarchy.terminal bash -c "$cmd"
+  else
+    exec bash -c "$cmd"
+  fi
+}
+
+ensure_flatpak() {
+  if fp_have flatpak; then
+    return 0
+  fi
+
+  notify "Flatpak is not installed. Opening setup..."
+  run_in_terminal "$SETUP setup"
+}
 
 case "${1:-}" in
+  setup)
+    run_in_terminal "$SETUP setup"
+    ;;
+
+  configure)
+    run_in_terminal "$SETUP configure"
+    ;;
+
+  check)
+    run_in_terminal "$SETUP check"
+    ;;
+
+  status)
+    fp_print_status
+    ;;
+
+  refresh)
+    run_in_terminal "$SETUP repair"
+    ;;
+
+  install)
+    ensure_flatpak
+    run_in_terminal "$INSTALLER"
+    ;;
+
   permissions)
+    ensure_flatpak
     apps=$("$HELPER" list-apps)
     if [[ -z $apps ]]; then
-      omarchy-notification-send "Flatpak" "No Flatpak applications installed."
+      notify "No Flatpak applications installed."
       exit 0
     fi
 
     selection=$(omarchy-menu-select "Flatpak App to Configure" <<<"$apps") || exit 0
     [[ -n $selection ]] || exit 0
 
-    # selection format is "<label>\t<app_id>"
     app_id=$(cut -f2 <<<"$selection")
     app_name=$(cut -f1 <<<"$selection")
     [[ -n $app_id ]] || exit 0
@@ -38,26 +97,19 @@ case "${1:-}" in
         break
       elif [[ $key == "reset" ]]; then
         msg=$("$HELPER" reset "$app_id")
-        omarchy-notification-send "Flatpak" "$msg"
+        notify "$msg"
       else
         msg=$("$HELPER" toggle "$app_id" "$key")
-        omarchy-notification-send "Flatpak" "$msg"
+        notify "$msg"
       fi
     done
     ;;
 
-  install)
-    if command -v xdg-terminal-exec >/dev/null 2>&1; then
-      exec xdg-terminal-exec --app-id=org.omarchy.terminal "$INSTALLER"
-    else
-      exec omarchy-launch-floating-terminal-with-presentation "$INSTALLER"
-    fi
-    ;;
-
   remove)
+    ensure_flatpak
     apps=$("$HELPER" list-apps)
     if [[ -z $apps ]]; then
-      omarchy-notification-send "Flatpak" "No Flatpak applications installed to remove."
+      notify "No Flatpak applications installed to remove."
       exit 0
     fi
 
@@ -65,21 +117,22 @@ case "${1:-}" in
     [[ -n $selection ]] || exit 0
 
     app_id=$(cut -f2 <<<"$selection")
-    app_name=$(cut -f1 <<<"$selection")
     [[ -n $app_id ]] || exit 0
 
-    omarchy-launch-floating-terminal-with-presentation \
-      "flatpak uninstall --user -y $(printf '%q' "$app_id"); omarchy-shell -q zamecki.flatpak-update refresh 2>/dev/null || true"
+    flag=$(fp_flag_for_app "$app_id")
+    run_in_terminal "flatpak uninstall $flag -y $(printf '%q' "$app_id"); omarchy-shell -q flatpak-integration-update refresh 2>/dev/null || true"
     ;;
 
   update)
-    omarchy-launch-floating-terminal-with-presentation "$UPDATER"
+    ensure_flatpak
+    run_in_terminal "$UPDATER"
     ;;
 
   reset)
+    ensure_flatpak
     apps=$("$HELPER" list-apps)
     if [[ -z $apps ]]; then
-      omarchy-notification-send "Flatpak" "No Flatpak applications installed."
+      notify "No Flatpak applications installed."
       exit 0
     fi
 
@@ -87,15 +140,14 @@ case "${1:-}" in
     [[ -n $selection ]] || exit 0
 
     app_id=$(cut -f2 <<<"$selection")
-    app_name=$(cut -f1 <<<"$selection")
     [[ -n $app_id ]] || exit 0
 
     msg=$("$HELPER" reset "$app_id")
-    omarchy-notification-send "Flatpak" "$msg"
+    notify "$msg"
     ;;
 
   *)
-    echo "Usage: omarchy-flatpak-menu <permissions|install|remove|update|reset>" >&2
+    echo "Usage: omarchy-flatpak-menu <setup|configure|check|refresh|permissions|install|remove|update|reset|status>" >&2
     exit 1
     ;;
 esac

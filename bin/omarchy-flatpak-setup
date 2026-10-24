@@ -1,0 +1,382 @@
+#!/bin/bash
+
+# omarchy:summary=Check dependencies and set up Flatpak with the Flathub remote
+# omarchy:group=flatpak
+# omarchy:name=setup
+# omarchy:args=[check|setup|configure|repair|status|install-deps] [options]
+# omarchy:examples=omarchy-flatpak-setup check | omarchy-flatpak-setup setup | omarchy-flatpak-setup configure --scope=user
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/flatpak-common.sh
+source "$SCRIPT_DIR/lib/flatpak-common.sh"
+
+usage() {
+  cat <<EOF
+Usage: omarchy-flatpak-setup <command> [options]
+
+Commands:
+  check          Show dependency, remote, and catalog status (default)
+  setup          Install missing dependencies, configure Flathub, refresh lists
+  configure      Choose the installation scope and Flathub remote
+  repair         Re-add/enable Flathub, refresh metadata and the app catalog
+  status         Print machine-readable status as JSON
+  install-deps   Install missing system packages only
+
+Options:
+  -y, --yes             Do not ask for confirmation
+      --no-install      Never install system packages
+      --scope=SCOPE     auto, user, or system
+      --remote=NAME     Remote name (default: flathub)
+      --url=URL         Remote .flatpakrepo URL
+      --stale-only      Only refresh metadata/catalog when older than the cache age
+      --json            JSON output for "check"
+  -q, --quiet           Only print warnings and errors
+  -h, --help            Show this help
+EOF
+}
+
+COMMAND="check"
+if (( $# > 0 )) && [[ $1 != -* ]]; then
+  COMMAND="$1"
+  shift
+fi
+
+ASSUME_YES=0
+NO_INSTALL=0
+STALE_ONLY=0
+QUIET=0
+JSON=0
+SCOPE_ARG=""
+REMOTE_ARG=""
+URL_ARG=""
+
+while (( $# > 0 )); do
+  case "$1" in
+    -y|--yes) ASSUME_YES=1 ;;
+    --no-install) NO_INSTALL=1 ;;
+    --stale-only) STALE_ONLY=1 ;;
+    -q|--quiet) QUIET=1 ;;
+    --json) JSON=1 ;;
+    --scope=*) SCOPE_ARG="${1#*=}" ;;
+    --scope)
+      shift
+      SCOPE_ARG="${1:-}"
+      ;;
+    --remote=*) REMOTE_ARG="${1#*=}" ;;
+    --remote)
+      shift
+      REMOTE_ARG="${1:-}"
+      ;;
+    --url=*) URL_ARG="${1#*=}" ;;
+    --url)
+      shift
+      URL_ARG="${1:-}"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "omarchy-flatpak-setup: unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if (( QUIET )); then
+  fp_info() { :; }
+  fp_ok() { :; }
+  fp_warn() { :; }
+  fp_note() { :; }
+  fp_heading() { :; }
+fi
+
+is_interactive() {
+  [[ -t 0 && -t 1 ]]
+}
+
+confirm() {
+  local prompt="$1"
+  (( ASSUME_YES )) && return 0
+  is_interactive || return 1
+  if fp_have gum; then
+    gum confirm "$prompt"
+  else
+    local answer
+    read -r -p "$prompt [y/N] " answer
+    [[ $answer =~ ^[Yy]$ ]]
+  fi
+}
+
+choose() {
+  local header="$1"
+  shift
+  if fp_have gum; then
+    gum choose --header "$header" "$@"
+  else
+    local i=1 option
+    printf '%s\n' "$header" >&2
+    for option in "$@"; do
+      printf '  %d) %s\n' "$i" "$option" >&2
+      ((i++))
+    done
+    local choice
+    read -r -p "Choice: " choice
+    [[ $choice =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "${@:$choice:1}"
+  fi
+}
+
+save_config() {
+  mkdir -p "$FP_CONFIG_DIR"
+  local tmp
+  tmp=$(mktemp "$FP_CONFIG_DIR/.config.XXXXXX") || return 1
+  {
+    printf '# flatpak-integration settings\n'
+    printf '# Scope: auto (prefer an existing remote), user, or system\n'
+    printf 'FP_SCOPE=%q\n' "$FP_SCOPE"
+    printf 'FP_REMOTE=%q\n' "$FP_REMOTE"
+    printf 'FP_REMOTE_URL=%q\n' "$FP_REMOTE_URL"
+    printf 'FP_CACHE_MAX_AGE=%q\n' "$FP_CACHE_MAX_AGE"
+  } >"$tmp"
+  chmod 0644 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$FP_CONFIG_FILE"
+  fp_ok "Saved settings to $FP_CONFIG_FILE"
+}
+
+apply_arguments() {
+  if [[ -n $SCOPE_ARG ]]; then
+    case "$SCOPE_ARG" in
+      auto|user|system) FP_SCOPE="$SCOPE_ARG" ;;
+      *)
+        fp_err "Invalid scope '$SCOPE_ARG' (expected auto, user, or system)."
+        return 1
+        ;;
+    esac
+  fi
+  [[ -n $REMOTE_ARG ]] && FP_REMOTE="$REMOTE_ARG"
+  [[ -n $URL_ARG ]] && FP_REMOTE_URL="$URL_ARG"
+  return 0
+}
+
+missing_packages() {
+  fp_missing_packages
+}
+
+warn_missing_omarchy() {
+  local missing
+  missing=$(fp_missing_omarchy_commands)
+  [[ -z $missing ]] && return 0
+  fp_err "This plugin must run inside Omarchy; missing helpers:"
+  while IFS= read -r cmd; do
+    printf '        %s\n' "$cmd" >&2
+  done <<<"$missing"
+  return 1
+}
+
+cmd_check() {
+  if (( JSON )); then
+    fp_print_status
+  else
+    fp_print_check
+  fi
+}
+
+cmd_install_deps() {
+  fp_heading "Flatpak Integration — dependencies"
+
+  local missing_cmd missing_pkg
+  missing_cmd=$(fp_missing_commands)
+  if [[ -z $missing_cmd ]]; then
+    fp_ok "All plugin dependencies are installed."
+    return 0
+  fi
+
+  while IFS= read -r missing_cmd; do
+    [[ -n $missing_cmd ]] || continue
+    fp_warn "Missing command: $missing_cmd"
+  done <<<"$missing_cmd"
+
+  missing_pkg=$(missing_packages)
+  if [[ -z $missing_pkg ]]; then
+    fp_warn "No automatic package mapping is available on this system."
+    fp_info "Install these commands with your package manager: $(tr '\n' ' ' <<<"$missing_cmd")"
+    return 1
+  fi
+
+  if (( NO_INSTALL )); then
+    fp_info "Would install: $(tr '\n' ' ' <<<"$missing_pkg")"
+    return 1
+  fi
+
+  if ! confirm "Install the missing packages now?"; then
+    fp_info "Skipped. Install them with: omarchy pkg add $(tr '\n' ' ' <<<"$missing_pkg")"
+    return 1
+  fi
+
+  # shellcheck disable=SC2086
+  fp_install_packages $missing_pkg || return 1
+
+  missing_cmd=$(fp_missing_commands)
+  if [[ -n $missing_cmd ]]; then
+    fp_err "Some dependencies are still missing: $(tr '\n' ' ' <<<"$missing_cmd")"
+    return 1
+  fi
+  fp_ok "Dependencies installed."
+  return 0
+}
+
+cmd_repair() {
+  local status=0
+
+  warn_missing_omarchy || status=1
+
+  if ! fp_have flatpak; then
+    fp_err "Flatpak is not installed. Run: omarchy-flatpak-setup setup"
+    return 1
+  fi
+
+  if fp_have bwrap; then
+    fp_ok "Bubblewrap available"
+  else
+    fp_warn "bubblewrap is missing; installed applications may not start."
+  fi
+
+  fp_ensure_remote || status=1
+
+  if (( STALE_ONLY )); then
+    fp_ensure_appstream --stale-only || status=1
+    fp_refresh_app_cache --quiet || status=1
+  else
+    fp_ensure_appstream || status=1
+    fp_refresh_app_cache --force --quiet || status=1
+  fi
+
+  if (( status == 0 )); then
+    fp_ok "Flatpak integration is ready ($(fp_scope_label "$(fp_resolve_scope)") installation)."
+  fi
+  return "$status"
+}
+
+cmd_setup() {
+  apply_arguments || return 1
+
+  fp_heading "Flatpak Integration — setup"
+
+  if ! warn_missing_omarchy; then
+    return 1
+  fi
+
+  if [[ -n $SCOPE_ARG || -n $REMOTE_ARG || -n $URL_ARG ]]; then
+    save_config || return 1
+  fi
+
+  if [[ -n $(fp_missing_commands) ]]; then
+    cmd_install_deps || {
+      fp_err "Setup cannot continue until the dependencies above are installed."
+      return 1
+    }
+  else
+    fp_ok "Flatpak $(fp_flatpak_version)"
+    fp_ok "fzf $(fzf --version 2>/dev/null | awk '{print $1; exit}')"
+    fp_ok "Bubblewrap available"
+  fi
+
+  if ! fp_have python3; then
+    fp_warn "Python is missing; the permission manager will not work."
+  else
+    fp_ok "Python permission engine available"
+  fi
+
+  # Make sure a scope exists before touching the remote.
+  fp_ensure_remote || {
+    fp_err "Could not configure the Flathub remote."
+    return 1
+  }
+
+  fp_ensure_appstream || fp_warn "Metadata refresh failed; cached data will be used if present."
+  fp_refresh_app_cache --force || fp_warn "Could not download the application catalog."
+
+  echo
+  fp_print_check
+  return $?
+}
+
+cmd_configure() {
+  apply_arguments || return 1
+
+  # Explicit values: save and apply without asking again.
+  if [[ -n $SCOPE_ARG || -n $REMOTE_ARG || -n $URL_ARG ]]; then
+    save_config || return 1
+    cmd_repair
+    return $?
+  fi
+
+  if ! is_interactive; then
+    fp_heading "Flatpak Integration — settings"
+    printf 'Scope:  %s\n' "$FP_SCOPE"
+    printf 'Remote: %s\n' "$FP_REMOTE"
+    printf 'URL:    %s\n' "$FP_REMOTE_URL"
+    printf 'Config: %s\n' "$FP_CONFIG_FILE"
+    return 0
+  fi
+
+  fp_heading "Flatpak Integration — settings"
+  printf 'Current scope:  %s\n' "$FP_SCOPE"
+  printf 'Current remote: %s\n\n' "$FP_REMOTE"
+
+  local choice
+  choice=$(choose "Where should Flatpak applications be installed?" \
+    "Auto — keep an existing remote, otherwise use per-user" \
+    "Per-user — no administrator password, private to this account" \
+    "System-wide — available to every user, needs administrator access") || return 0
+
+  case "$choice" in
+    Per-user*) FP_SCOPE="user" ;;
+    System-wide*) FP_SCOPE="system" ;;
+    *) FP_SCOPE="auto" ;;
+  esac
+
+  printf '\nInstallation scope set to: %s\n' "$FP_SCOPE"
+
+  if confirm "Add or enable the $FP_REMOTE remote now?"; then
+    save_config || return 1
+    cmd_repair
+    return $?
+  fi
+
+  save_config
+}
+
+case "$COMMAND" in
+  check)
+    cmd_check
+    ;;
+  setup)
+    cmd_setup
+    ;;
+  configure)
+    cmd_configure
+    ;;
+  repair)
+    cmd_repair
+    ;;
+  status)
+    fp_print_status
+    ;;
+  install-deps)
+    cmd_install_deps
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    echo "omarchy-flatpak-setup: unknown command: $COMMAND" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

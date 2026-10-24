@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-omarchy-flatpak-permissions: Inspection and override engine for Flatpak permissions.
+omarchy-flatpak-permissions: inspection and override engine for Flatpak
+permissions.
+
+Permissions are read from the application metadata plus the user and system
+override files, and written as per-user overrides. Per-user overrides work for
+both per-user and system-wide applications and never need administrator access.
 """
 
-import sys
+from __future__ import annotations
+
 import subprocess
-import configparser
+import sys
 
 PERMISSIONS = [
     {
@@ -106,113 +112,213 @@ PERMISSIONS = [
     },
 ]
 
-def get_installed_apps():
-    cmd = ["flatpak", "list", "--app", "--columns=application,name"]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0:
+
+# ---------------------------------------------------------------------------
+# Flatpak helpers
+# ---------------------------------------------------------------------------
+
+
+def run_flatpak(args: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            ["flatpak", *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(["flatpak", *args], 1, "", str(exc))
+
+
+def get_installed_apps() -> list[tuple[str, str, str]]:
+    """Return (application id, name, installation) for every installed app."""
+    result = run_flatpak(["list", "--app", "--columns=application,name,installation"])
+    if result.returncode != 0:
+        result = run_flatpak(["list", "--app", "--columns=application,name"])
+    if result.returncode != 0:
         return []
-    lines = res.stdout.strip().splitlines()
-    if not lines:
-        return []
-    # Drop header
-    data = []
-    for line in lines[1:]:
+
+    apps: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for line in result.stdout.splitlines():
         parts = line.split("\t")
-        if len(parts) >= 2:
-            app_id = parts[0].strip()
-            name = parts[1].strip()
-            data.append((app_id, name))
-        elif line.strip():
-            # Fallback split
-            tokens = line.split(maxsplit=1)
-            if tokens:
-                app_id = tokens[0]
-                name = tokens[1] if len(tokens) > 1 else tokens[0]
-                data.append((app_id, name))
-    return data
+        if len(parts) < 2:
+            continue
+        app_id = parts[0].strip()
+        name = parts[1].strip() or app_id
+        installation = parts[2].strip() if len(parts) > 2 else ""
+        if not app_id or app_id in seen:
+            continue
+        seen.add(app_id)
+        apps.append((app_id, name, installation))
 
-def parse_app_permissions(app_id):
-    cmd = ["flatpak", "info", "--show-permissions", app_id]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0:
-        return {}
+    apps.sort(key=lambda app: (app[1].lower(), app[0]))
+    return apps
 
-    context = {}
-    current_section = None
-    for line in res.stdout.splitlines():
-        line = line.strip()
-        if not line:
+
+def get_app_installation(app_id: str) -> str:
+    result = run_flatpak(["list", "--app", "--columns=application,installation"])
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2 and parts[0].strip() == app_id:
+                return parts[1].strip()
+    return ""
+
+
+def installation_flag(installation: str) -> list[str]:
+    if installation == "user":
+        return ["--user"]
+    if installation in ("", "system", "default"):
+        return ["--system"]
+    return [f"--installation={installation}"]
+
+
+def installation_label(installation: str) -> str:
+    if installation == "user":
+        return "per-user"
+    if installation in ("", "system", "default"):
+        return "system"
+    return installation
+
+
+# ---------------------------------------------------------------------------
+# Permission parsing
+# ---------------------------------------------------------------------------
+
+
+def parse_ini(text: str) -> dict[str, dict[str, list[str]]]:
+    """Parse Flatpak metadata/override text into section -> key -> values."""
+    result: dict[str, dict[str, list[str]]] = {}
+    section: str | None = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
             continue
         if line.startswith("[") and line.endswith("]"):
-            current_section = line[1:-1]
-            if current_section not in context:
-                context[current_section] = {}
-        elif "=" in line and current_section:
-            key, val = line.split("=", 1)
-            items = [v for v in val.split(";") if v]
-            context[current_section][key.strip()] = items
+            section = line[1:-1]
+            result.setdefault(section, {})
+            continue
+        if "=" not in line or section is None:
+            continue
 
-    return context.get("Context", {})
+        key, value = line.split("=", 1)
+        values = [item for item in value.split(";") if item]
+        result.setdefault(section, {})[key.strip()] = values
 
-def is_permission_granted(context, perm_spec):
-    cat = perm_spec["category"]
-    val = perm_spec["value"]
-    cat_items = context.get(cat, [])
-    # Check if value is present without leading negation
-    for item in cat_items:
-        if item == val:
-            return True
-        if item == "!" + val:
-            return False
-    return False
+    return result
 
-def list_permissions_for_menu(app_id):
-    context = parse_app_permissions(app_id)
-    # Header options
+
+def apply_values(target: set[str], values: list[str]) -> None:
+    """Apply Flatpak's add/remove (!value) syntax in order."""
+    for value in values:
+        if value.startswith("!"):
+            target.discard(value[1:])
+        else:
+            target.add(value)
+
+
+def effective_context(app_id: str) -> dict[str, dict[str, set[str]]]:
+    """
+    Merge the application metadata with per-user and system overrides.
+
+    Returns section -> key -> granted values.
+    """
+    installation = get_app_installation(app_id)
+    contexts: list[dict[str, dict[str, list[str]]]] = []
+
+    base = run_flatpak(["info", *installation_flag(installation), "--show-permissions", app_id])
+    if base.returncode != 0:
+        # Fall back to letting Flatpak find the app in any installation.
+        base = run_flatpak(["info", "--show-permissions", app_id])
+    if base.returncode == 0:
+        contexts.append(parse_ini(base.stdout))
+
+    for scope_flag in ("--user", "--system"):
+        override = run_flatpak(["override", scope_flag, "--show", app_id])
+        if override.returncode == 0 and override.stdout.strip():
+            contexts.append(parse_ini(override.stdout))
+
+    merged: dict[str, dict[str, set[str]]] = {}
+    for context in contexts:
+        context_section = context.get("Context", {})
+        for key, values in context_section.items():
+            target = merged.setdefault("Context", {}).setdefault(key, set())
+            apply_values(target, values)
+
+    return merged
+
+
+def is_permission_granted(context: dict[str, dict[str, set[str]]], spec: dict[str, str]) -> bool:
+    category = spec["category"]
+    value = spec["value"]
+    return value in context.get("Context", {}).get(category, set())
+
+
+# ---------------------------------------------------------------------------
+# Menu actions
+# ---------------------------------------------------------------------------
+
+
+def list_apps() -> None:
+    for app_id, name, installation in get_installed_apps():
+        label = f"{name} ({installation_label(installation)})"
+        print(f"󰏓\t{label}\t{app_id}")
+
+
+def list_permissions_for_menu(app_id: str) -> None:
+    context = effective_context(app_id)
     print("←\tDone / Return to Apps\tdone")
-    print("\tReset All Overrides for this App\treset")
-    for p in PERMISSIONS:
-        granted = is_permission_granted(context, p)
+    print("\tReset All User Overrides for this App\treset")
+
+    for spec in PERMISSIONS:
+        granted = is_permission_granted(context, spec)
         glyph = "󰄬" if granted else "󰅖"
         status = "Granted" if granted else "Denied"
-        label = f"{glyph} {p['label']} [{status}]"
-        print(f"{glyph}\t{label}\t{p['key']}")
+        print(f"{glyph}\t{spec['label']} [{status}]\t{spec['key']}")
 
-def toggle_permission(app_id, perm_key):
-    spec = next((p for p in PERMISSIONS if p["key"] == perm_key), None)
-    if not spec:
+
+def toggle_permission(app_id: str, perm_key: str) -> tuple[bool, str]:
+    spec = next((item for item in PERMISSIONS if item["key"] == perm_key), None)
+    if spec is None:
         return False, f"Unknown permission key: {perm_key}"
 
-    context = parse_app_permissions(app_id)
+    context = effective_context(app_id)
     currently_granted = is_permission_granted(context, spec)
     flag = spec["disable_flag"] if currently_granted else spec["enable_flag"]
     new_state = "Denied" if currently_granted else "Granted"
 
-    cmd = ["flatpak", "override", "--user", flag, app_id]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode == 0:
+    result = run_flatpak(["override", "--user", flag, app_id])
+    if result.returncode == 0:
         return True, f"{spec['label']} is now {new_state}"
-    else:
-        return False, res.stderr.strip()
+    return False, result.stderr.strip() or "Could not update the permission"
 
-def reset_overrides(app_id):
-    cmd = ["flatpak", "override", "--user", "--reset", app_id]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode == 0:
-        return True, f"Reset all overrides for {app_id}"
-    else:
-        return False, res.stderr.strip()
 
-def main():
+def reset_overrides(app_id: str) -> tuple[bool, str]:
+    result = run_flatpak(["override", "--user", "--reset", app_id])
+    if result.returncode == 0:
+        return True, f"Reset user overrides for {app_id}"
+    return False, result.stderr.strip() or "Could not reset overrides"
+
+
+def show_scope(app_id: str) -> None:
+    print(installation_label(get_app_installation(app_id)))
+
+
+def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: omarchy-flatpak-permissions <list-apps|list-permissions|toggle|reset> [args...]")
+        print(
+            "Usage: omarchy-flatpak-permissions "
+            "<list-apps|list-permissions|toggle|reset|scope> [args...]",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     action = sys.argv[1]
+
     if action == "list-apps":
-        apps = get_installed_apps()
-        for app_id, name in apps:
-            print(f"󰏓\t{name}\t{app_id}")
+        list_apps()
     elif action == "list-permissions":
         if len(sys.argv) < 3:
             sys.exit(1)
@@ -220,18 +326,23 @@ def main():
     elif action == "toggle":
         if len(sys.argv) < 4:
             sys.exit(1)
-        ok, msg = toggle_permission(sys.argv[2], sys.argv[3])
-        print(msg)
+        ok, message = toggle_permission(sys.argv[2], sys.argv[3])
+        print(message)
         sys.exit(0 if ok else 1)
     elif action == "reset":
         if len(sys.argv) < 3:
             sys.exit(1)
-        ok, msg = reset_overrides(sys.argv[2])
-        print(msg)
+        ok, message = reset_overrides(sys.argv[2])
+        print(message)
         sys.exit(0 if ok else 1)
+    elif action == "scope":
+        if len(sys.argv) < 3:
+            sys.exit(1)
+        show_scope(sys.argv[2])
     else:
-        print(f"Unknown action: {action}")
+        print(f"Unknown action: {action}", file=sys.stderr)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

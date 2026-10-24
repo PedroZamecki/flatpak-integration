@@ -6,7 +6,7 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "zamecki.flatpak-integration"
+  moduleName: "flatpak-integration"
 
   property bool updateAvailable: false
   property int updateCount: 0
@@ -32,7 +32,7 @@ BarWidget {
   implicitHeight: button.implicitHeight
 
   IpcHandler {
-    target: "zamecki.flatpak-update"
+    target: "flatpak-integration-update"
 
     function refresh(): void {
       root.broadcast("refresh")

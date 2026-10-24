@@ -1,27 +1,61 @@
 #!/bin/bash
 
-# omarchy:summary=Update Flatpak packages and refresh shell update status
+# omarchy:summary=Update Flatpak packages and refresh the shell update indicator
 # omarchy:group=flatpak
 # omarchy:name=update
+# omarchy:args=[flatpak update options]
 
-if ! command -v flatpak >/dev/null 2>&1; then
-  echo "Error: Flatpak is not installed." >&2
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/flatpak-common.sh
+source "$SCRIPT_DIR/lib/flatpak-common.sh"
+
+if ! fp_have flatpak; then
+  fp_err "Flatpak is not installed."
+  fp_info "Run: omarchy-flatpak-setup setup"
   exit 1
 fi
 
-if (( $# == 0 )); then
-  flatpak update -y
-else
+# Direct passthrough for callers that need specific flatpak update arguments.
+if (( $# > 0 )); then
   flatpak update "$@"
-fi
-update_status=$?
-
-if command -v omarchy-shell >/dev/null 2>&1; then
-  if (( update_status == 0 )); then
-    omarchy-shell -q zamecki.flatpak-update clear 2>/dev/null || true
-  else
-    omarchy-shell -q zamecki.flatpak-update refresh 2>/dev/null || true
+  status=$?
+  if fp_have omarchy-shell; then
+    if (( status == 0 )); then
+      omarchy-shell -q flatpak-integration-update clear >/dev/null 2>&1 || true
+    else
+      omarchy-shell -q flatpak-integration-update refresh >/dev/null 2>&1 || true
+    fi
   fi
+  exit "$status"
 fi
 
-exit $update_status
+fp_ensure_appstream --stale-only >/dev/null 2>&1 || true
+
+status=0
+updated_any=0
+
+for scope in user system; do
+  fp_scope_has_refs "$scope" || continue
+  updated_any=1
+  flag=$(fp_scope_flag "$scope")
+  printf '%s\n' "Updating Flatpak applications ($(fp_scope_label "$scope"))..."
+  if ! flatpak update "$flag" -y; then
+    fp_warn "Updates failed for the $(fp_scope_label "$scope") installation."
+    status=1
+  fi
+done
+
+if (( ! updated_any )); then
+  fp_info "No Flatpak applications or runtimes are installed yet."
+fi
+
+if fp_have omarchy-shell; then
+  if (( status == 0 )); then
+    omarchy-shell -q flatpak-integration-update clear >/dev/null 2>&1 || true
+  fi
+  omarchy-shell -q flatpak-integration-update refresh >/dev/null 2>&1 || true
+fi
+
+exit "$status"

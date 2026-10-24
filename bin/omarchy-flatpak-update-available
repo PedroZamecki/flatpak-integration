@@ -1,24 +1,42 @@
 #!/bin/bash
 
 # omarchy:summary=Check whether Flatpak updates are available
-# Outputs count of updates and exits 0 if updates are available, 1 if not.
+# Outputs the number of pending updates and exits 0 when at least one exists.
 
-set -eo pipefail
+set -uo pipefail
 
-if ! command -v flatpak >/dev/null 2>&1; then
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/flatpak-common.sh
+source "$SCRIPT_DIR/lib/flatpak-common.sh"
+
+if ! fp_have flatpak; then
   echo "0"
   exit 1
 fi
 
-# Query user and system remotes with timeout to prevent blocking on network issues
-updates=$( { timeout 15 flatpak remote-ls --user --updates 2>/dev/null || true; \
-             timeout 15 flatpak remote-ls --system --updates 2>/dev/null || true; } | grep -v '^[[:space:]]*$' || true )
+refs=""
+found_remote=0
 
-if [[ -n $updates ]]; then
-  count=$(echo "$updates" | wc -l)
+for scope in user system; do
+  fp_remote_exists "$scope" || continue
+  found_remote=1
+  flag=$(fp_scope_flag "$scope")
+  out=$(timeout 20 flatpak remote-ls "$flag" --updates --columns=ref 2>/dev/null) || continue
+  [[ -n $out ]] && refs+="$out"$'\n'
+done
+
+if (( ! found_remote )); then
+  echo "0"
+  exit 1
+fi
+
+count=$(printf '%s' "$refs" | sed '/^$/d' | LC_ALL=C sort -u | wc -l | awk '{print $1}')
+[[ -n $count ]] || count=0
+
+if (( count > 0 )); then
   echo "$count"
   exit 0
-else
-  echo "0"
-  exit 1
 fi
+
+echo "0"
+exit 1

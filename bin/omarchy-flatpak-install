@@ -3,50 +3,147 @@
 # omarchy:summary=Show a fuzzy-finder TUI for picking new Flatpak applications to install from Flathub.
 # omarchy:group=flatpak
 # omarchy:name=install
+# omarchy:args=[--refresh]
 
-set -euo pipefail
+set -uo pipefail
 
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy"
-CACHE_FILE="$CACHE_DIR/flathub-apps.cache"
-mkdir -p "$CACHE_DIR"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/flatpak-common.sh
+source "$SCRIPT_DIR/lib/flatpak-common.sh"
 
-# Refresh cache if missing or older than 24 hours
-if [[ ! -f $CACHE_FILE || $(find "$CACHE_FILE" -mtime +1 2>/dev/null) ]]; then
-  echo "Updating Flathub application index..."
-  flatpak remote-ls --user --app flathub --columns=application,name,version > "$CACHE_FILE.tmp" 2>/dev/null && \
-    mv -f "$CACHE_FILE.tmp" "$CACHE_FILE" || rm -f "$CACHE_FILE.tmp"
-fi
+REFRESH=0
+for arg in "$@"; do
+  case "$arg" in
+    --refresh|-r) REFRESH=1 ;;
+    -h|--help)
+      echo "Usage: omarchy-flatpak-install [--refresh]"
+      exit 0
+      ;;
+    *) echo "omarchy-flatpak-install: unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
 
-if [[ ! -s $CACHE_FILE ]]; then
-  echo "Error: Unable to fetch Flathub application list. Please verify your internet connection or run: flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo" >&2
+interactive() { [[ -t 0 && -t 1 ]]; }
+
+offer_setup() {
+  interactive || return 1
+  local answer
+  read -r -p "Run the Flatpak setup now? [Y/n] " answer
+  [[ -z $answer || $answer =~ ^[Yy]$ ]] || return 1
+  exec "$SCRIPT_DIR/omarchy-flatpak-setup" setup
+}
+
+# --- Dependencies ----------------------------------------------------------
+missing=$(fp_missing_commands)
+if [[ -n $missing ]]; then
+  fp_err "Missing dependencies: $(tr '\n' ' ' <<<"$missing")"
+  fp_info "Run: omarchy-flatpak-setup setup"
+  offer_setup || true
   exit 1
 fi
 
-fzf_args=(
-  --multi
-  --delimiter '\t'
-  --with-nth '2,1,3'
-  --preview 'flatpak remote-info --user flathub {1}'
-  --preview-label='alt-p: toggle details, alt-j/k: scroll, tab: multi-select'
-  --preview-label-pos='bottom'
-  --preview-window 'down:65%:wrap'
-  --bind 'alt-p:toggle-preview'
-  --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
-  --bind 'alt-k:preview-up,alt-j:preview-down'
-  --color 'pointer:green,marker:green'
-  --prompt 'Flatpak > '
-  --header 'Tab: select multiple | Enter: install selected | Esc: cancel'
+# --- Flathub remote --------------------------------------------------------
+# Self-heal a fresh Flatpak installation: if no installation has Flathub yet,
+# add it to the per-user installation (no administrator password needed).
+fp_ensure_remote >/dev/null 2>&1 || true
+
+scope=$(fp_scope_with_remote) || {
+  fp_err "The $FP_REMOTE remote is not configured in any Flatpak installation."
+  fp_info "This is why the application list is empty on a fresh Flatpak install."
+  offer_setup || true
+  exit 1
+}
+
+flag=$(fp_scope_flag "$scope")
+fp_ensure_appstream --stale-only >/dev/null 2>&1 || true
+
+if (( REFRESH )); then
+  fp_refresh_app_cache --force --quiet || true
+else
+  fp_refresh_app_cache --quiet || true
+fi
+
+# A freshly added remote can briefly return nothing even though the cache
+# refresh succeeded. Retry once before giving up.
+if [[ ! -s $FP_APPS_CACHE ]]; then
+  fp_refresh_app_cache --force --quiet || true
+fi
+
+if [[ ! -s $FP_APPS_CACHE ]]; then
+  fp_err "Unable to fetch the Flathub application list."
+  fp_info "Check your network connection, then run: omarchy-flatpak-setup repair"
+  fp_info "Remote configured in the $(fp_scope_label "$scope") installation: $FP_REMOTE"
+  offer_setup || true
+  exit 1
+fi
+
+# --- Build the list --------------------------------------------------------
+installed_ids=$(fp_installed_app_ids 2>/dev/null || true)
+
+rows=$(
+  while IFS=$'\t' read -r app name version; do
+    [[ -n $app ]] || continue
+    if [[ -n $installed_ids ]] && grep -Fxq -- "$app" <<<"$installed_ids"; then
+      marker="✓"
+    else
+      marker=" "
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$app" "$marker" "$name" "$version"
+  done <"$FP_APPS_CACHE"
 )
 
-selected=$(fzf "${fzf_args[@]}" < "$CACHE_FILE" | cut -f1)
+if [[ -z $rows ]]; then
+  fp_err "The Flathub application list is empty. Run: omarchy-flatpak-setup repair"
+  exit 1
+fi
 
-if [[ -n $selected ]]; then
-  echo "Installing selected Flatpak application(s)..."
-  # tr '\n' ' ' converts multiline selections to arguments
-  echo "$selected" | tr '\n' ' ' | xargs flatpak install --user -y flathub
-  if command -v omarchy-show-done >/dev/null 2>&1; then
+# --- Pick applications -----------------------------------------------------
+selected=$(
+  printf '%s\n' "$rows" |
+    fzf \
+      --multi \
+      --delimiter '\t' \
+      --with-nth '2,3,4' \
+      --preview "timeout 20 flatpak remote-info $flag $FP_REMOTE {1}" \
+      --preview-label='alt-p: toggle details, alt-j/k: scroll, tab: multi-select' \
+      --preview-label-pos='bottom' \
+      --preview-window 'down:65%:wrap' \
+      --bind 'alt-p:toggle-preview' \
+      --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up' \
+      --bind 'alt-k:preview-up,alt-j:preview-down' \
+      --color 'pointer:green,marker:green' \
+      --prompt 'Flatpak > ' \
+      --header "Scope: $(fp_scope_label "$scope") | ✓ = installed | Tab: multi-select | Enter: install | Esc: cancel"
+)
+fzf_status=$?
+
+if (( fzf_status == 130 || fzf_status == 1 )); then
+  exit 0
+fi
+
+selected=$(cut -f1 <<<"$selected" | sed '/^$/d')
+[[ -n $selected ]] || exit 0
+
+mapfile -t apps <<<"$selected"
+(( ${#apps[@]} > 0 )) || exit 0
+
+echo "Installing ${#apps[@]} application(s) from $FP_REMOTE ($(fp_scope_label "$scope"))..."
+if flatpak install "$flag" -y "$FP_REMOTE" "${apps[@]}"; then
+  if fp_have omarchy-shell; then
+    omarchy-shell -q flatpak-integration-update refresh >/dev/null 2>&1 || true
+  fi
+  if fp_have omarchy-notification-send; then
+    omarchy-notification-send "Flatpak" "Installed ${#apps[@]} application(s)."
+  fi
+
+  if fp_have omarchy-show-done; then
     omarchy-show-done
   else
     echo "Done! Installation complete."
   fi
+else
+  fp_err "Installation failed."
+  fp_info "If Flatpak asked for administrator access, run the setup from a terminal:"
+  fp_info "  omarchy-flatpak-setup configure --scope=user"
+  exit 1
 fi

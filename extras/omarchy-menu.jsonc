@@ -1,44 +1,69 @@
 {
-  // Omarchy Flatpak Integration Menu Extension
+  // Flatpak Integration menu extension
+  // Installed automatically by install.sh. Kept here as a reference template.
   "install.flatpak": {
-    "icon": "",
+    "icon": "󰏓",
     "label": "Flatpak",
     "description": "Search and install Flatpaks from Flathub",
-    "action": "xdg-terminal-exec --app-id=org.omarchy.terminal omarchy-flatpak-install"
+    "action": "omarchy-flatpak-menu install"
   },
   "setup.flatpak": {
-    "icon": "",
+    "icon": "󰏓",
     "label": "Flatpaks",
     "aliases": ["flatpak", "flatpaks", "flatseal"]
+  },
+  "setup.flatpak.setup": {
+    "icon": "󰒓",
+    "label": "Setup & Check",
+    "description": "Install dependencies, configure Flathub, refresh lists",
+    "action": "omarchy-flatpak-menu setup"
+  },
+  "setup.flatpak.configure": {
+    "icon": "󰒓",
+    "label": "Settings",
+    "description": "Choose per-user or system-wide installation",
+    "action": "omarchy-flatpak-menu configure"
+  },
+  "setup.flatpak.refresh": {
+    "icon": "󰑐",
+    "label": "Refresh App Catalog",
+    "when": "omarchy-cmd-present flatpak",
+    "description": "Update the Flathub application list",
+    "action": "omarchy-flatpak-menu refresh"
   },
   "setup.flatpak.permissions": {
     "icon": "󰌾",
     "label": "Manage Permissions",
+    "when": "omarchy-cmd-present flatpak",
     "description": "Configure sandbox permissions for Flatpaks",
     "action": "omarchy-flatpak-menu permissions"
   },
   "setup.flatpak.install": {
     "icon": "󰉉",
     "label": "Install Application",
+    "when": "omarchy-cmd-present flatpak",
     "description": "Search and install new Flatpaks from Flathub",
     "action": "omarchy-flatpak-menu install"
   },
   "setup.flatpak.remove": {
     "icon": "󰭌",
     "label": "Remove Application",
+    "when": "omarchy-cmd-present flatpak",
     "description": "Uninstall an installed Flatpak",
     "action": "omarchy-flatpak-menu remove"
   },
   "setup.flatpak.update": {
     "icon": "",
     "label": "Update Applications",
+    "when": "omarchy-cmd-present flatpak",
     "description": "Update installed Flatpaks",
     "action": "omarchy-flatpak-menu update"
   },
   "setup.flatpak.reset": {
     "icon": "",
     "label": "Reset Permissions",
-    "description": "Reset permissions to defaults",
+    "when": "omarchy-cmd-present flatpak",
+    "description": "Reset user permission overrides to defaults",
     "action": "omarchy-flatpak-menu reset"
   }
 }
