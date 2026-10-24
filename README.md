@@ -73,6 +73,36 @@ omarchy-flatpak-setup setup
 The installer is idempotent. It also migrates the old
 `zamecki.flatpak-integration` menu entries, bar widget, and shims.
 
+## Privileges and side effects
+
+Omarchy plugins run unsandboxed inside the long-running shell process with your
+user permissions. This plugin keeps privilege use to a minimum:
+
+- **Writes only inside your home directory**
+  - `~/.local/bin/omarchy-flatpak-*` command shims
+  - `~/.config/omarchy/extensions/omarchy-menu.jsonc`
+  - `~/.config/omarchy/hooks/post-update.d/flatpak-update.hook`
+  - `~/.config/omarchy/shell.json` (bar layout entry)
+  - `~/.config/omarchy/flatpak-integration/config`
+  - `~/.cache/omarchy/flatpak-integration-apps.cache`
+- **No administrator access by default.** The default `auto` scope prefers the
+  per-user Flatpak installation, and permission overrides are written per-user
+  (`flatpak override --user`), so normal use never asks for sudo.
+- **Optional package installation.** `omarchy-flatpak-setup setup` and
+  `install-deps` install missing Arch packages (`flatpak`, `bubblewrap`, `fzf`,
+  `python`, `jq`) through `omarchy-pkg-add`/`pacman`, which prompts for sudo.
+  Pass `--no-install` to skip this.
+- **Optional system-wide operations.** Choosing `--scope=system`, or having
+  Flathub only in the system installation, makes `flatpak remote-add`,
+  `flatpak update --appstream`, and `flatpak update --system` request
+  administrator access.
+- **Network access.** Setup and refresh contact the configured remote
+  (`dl.flathub.org` by default) to download AppStream metadata and the
+  application catalog.
+- **No second shell process.** The plugin is a Quickshell service and bar
+  widget inside the existing Omarchy shell; external commands run only when you
+  trigger an action.
+
 ## Configuration
 
 Settings live in:
