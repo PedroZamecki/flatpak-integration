@@ -37,9 +37,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Manually installed Flatpaks appear in the Apps menu without logging out, even
   when the shell started before Flatpak was installed.
 
+## [1.1.0] - 2026-10-14
+
+### Added
+
+- Topbar update indicator for pending Flatpak updates.
+- `omarchy update` hook that updates Flatpaks and refreshes the indicator.
+
+### Fixed
+
+- Duplicate close prompt in the update flow.
+
 ## [1.0.0] - 2026-10-11
 
 ### Added
 
-- Initial release: Flathub search and install menu, topbar update indicator,
-  and an `omarchy update` hook.
+- Initial release: Flathub search and install menu.
